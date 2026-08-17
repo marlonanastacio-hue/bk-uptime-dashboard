@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BK Network Monitoring — Uptime Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #14171c; --panel-2: #1b1f26; --border: #2a2f38;
+    --text: #e7e9ec; --text-dim: #9aa2ad; --text-mute: #6b7280;
+    --emerald: #0ea56f; --sg: #22c55e; --green: #84cc16; --yellow: #eab308; --red: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 24px; line-height: 1.5;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; }
+  .config-bar {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 20px; font-size: 13px;
+  }
+  .config-bar input {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 8px; font-size: 13px; flex: 1; min-width: 160px;
+  }
+  .config-bar button {
+    background: #2563eb; color: white; border: none; border-radius: 6px;
+    padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  .config-bar button:hover { background: #1d4ed8; }
+  .status-line { font-size: 12px; color: var(--text-mute); margin-left: auto; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+  }
+  .card .label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+  .card .value { font-size: 22px; font-weight: 600; }
+  .card .sub-value { font-size: 12px; color: var(--text-mute); margin-top: 4px; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
+    border-radius: 999px; font-size: 12px; font-weight: 600;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .tier-emerald { background: rgba(14,165,111,0.15); color: var(--emerald); }
+  .tier-sg { background: rgba(34,197,94,0.15); color: var(--sg); }
+  .tier-green { background: rgba(132,204,22,0.15); color: var(--green); }
+  .tier-yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
+  .tier-red { background: rgba(239,68,68,0.15); color: var(--red); }
+  .tier-na { background: rgba(107,114,128,0.15); color: var(--text-mute); }
+
+  section { margin-bottom: 28px; }
+  section h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--text-dim); font-weight: 500; font-size: 12px; }
+  tr:hover td { background: var(--panel-2); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .weekend-row td { color: var(--text-mute); }
+
+  .chart-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; }
+
+  .msg { color: var(--text-mute); font-size: 13px; padding: 20px; text-align: center; }
+  .error-box {
+    background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+    color: #fca5a5; border-radius: 8px; padding: 12px 14px; font-size: 13px; margin-bottom: 20px;
+    white-space: pre-wrap;
+  }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+  .filter-bar {
+    display: none; gap: 6px; align-items: center; margin-bottom: 20px;
+  }
+  .filter-bar .filter-label { font-size: 12px; color: var(--text-dim); margin-right: 4px; }
+  .filter-bar button {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  .filter-bar button:hover { color: var(--text); border-color: #3a4150; }
+  .filter-bar button.active { background: #2563eb; border-color: #2563eb; color: white; }
+
+  .live-card { cursor: pointer; text-align: left; font: inherit; color: inherit; width: 100%; }
+  .live-card:hover { border-color: #3a4150; }
+  .live-card.expanded { border-color: #2563eb; }
+  .live-card:disabled { cursor: default; }
+  .live-card:disabled:hover { border-color: var(--border); }
+  .device-panel {
+    margin-top: -10px; margin-bottom: 24px; background: var(--panel); border: 1px solid var(--border);
+    border-top: none; border-radius: 0 0 10px 10px; padding: 4px 12px; overflow-x: auto;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .hero {
+    background: var(--panel); border: 1px solid var(--border); border-left: 5px solid var(--border);
+    border-radius: 10px; padding: 20px 22px; margin-bottom: 24px;
+  }
+  .hero-label { font-size: 13px; color: var(--text-dim); margin-bottom: 10px; }
+  .hero-value { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 10px; }
+  .hero-pct { font-size: 40px; font-weight: 700; line-height: 1; }
+  .hero-sub { font-size: 12px; color: var(--text-mute); }
+
+  tr.period-row { cursor: pointer; }
+  tr.period-row:hover td { background: var(--panel-2); }
+  tr.period-row.expanded td { background: var(--panel-2); border-bottom-color: #3a4150; }
+  tr.drill-row td { background: rgba(255,255,255,0.02); color: var(--text-dim); font-size: 12px; }
+  tr.drill-row:hover td { background: rgba(255,255,255,0.05); }
+  .expand-arrow { display: inline-block; width: 10px; margin-right: 4px; color: var(--text-mute); }
+  .section-note { font-size: 12px; color: var(--text-mute); margin: -6px 0 14px; max-width: 640px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<h1>BK Network Monitoring</h1>
+<div class="sub">Uptime and downtime — scored against the LAG scorecard rubric</div>
+
+<div class="config-bar">
+  <input id="cfg-url" placeholder="Apps Script Web app URL (…/exec)" />
+  <input id="cfg-secret" placeholder="Apps Script secret" type="password" />
+  <input id="cfg-tab" placeholder="Scoreboard tab name" value="Sheet1" style="max-width: 160px;" />
+  <button id="cfg-load">Load dashboard</button>
+  <span class="status-line" id="status-line"></span>
+</div>
+
+<div id="error-slot"></div>
+
+<div class="filter-bar" id="filter-bar">
+  <span class="filter-label">Report period:</span>
+  <button data-granularity="daily">Daily</button>
+  <button data-granularity="weekly" class="active">Weekly (13-week)</button>
+  <button data-granularity="monthly">Monthly</button>
+  <button data-granularity="quarterly">Quarterly</button>
+  <button data-granularity="yearly">Yearly</button>
+</div>
+
+<div id="app"><div class="msg">Enter your Apps Script URL and secret above, then click "Load dashboard".</div></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Config persistence — this file is meant to stay private (inside your
+// repo / on your own machine), so it's fine to remember your settings in
+// this browser via localStorage. Never host this file somewhere public,
+// since the secret would be visible in the page once entered.
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+
+function loadSavedConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("bkNetworkDashboardConfig") || "{}");
+    if (saved.url) $("cfg-url").value = saved.url;
+    if (saved.secret) $("cfg-secret").value = saved.secret;
+    if (saved.tab) $("cfg-tab").value = saved.tab;
+  } catch (e) { /* ignore */ }
+}
+function saveConfig(cfg) {
+  localStorage.setItem("bkNetworkDashboardConfig", JSON.stringify(cfg));
+}
+loadSavedConfig();
+
+// ---------------------------------------------------------------------------
+// LAG scorecard tiers — "Critical IT systems & connection uptime"
+// Each tier's floor is the minimum uptime % required to reach it; a day
+// that doesn't clear the Yellow floor (94%) falls to Red.
+// ---------------------------------------------------------------------------
+const TIERS = [
+  { name: "Emerald", score: 5, min: 99.9, cls: "tier-emerald", color: "#0ea56f" },
+  { name: "SG",      score: 4, min: 99.5, cls: "tier-sg",      color: "#22c55e" },
+  { name: "Green",   score: 3, min: 98,   cls: "tier-green",   color: "#84cc16" },
+  { name: "Yellow",  score: 2, min: 94,   cls: "tier-yellow",  color: "#eab308" },
+  { name: "Red",     score: 1, min: 0,    cls: "tier-red",     color: "#ef4444" },
+];
+
+function tierFor(uptimePct) {
+  if (uptimePct === null || uptimePct === undefined || isNaN(uptimePct)) return null;
+  for (const t of TIERS) {
+    if (uptimePct >= t.min) return t;
+  }
+  return TIERS[TIERS.length - 1];
+}
+
+function tierBadge(tier) {
+  if (!tier) return `<span class="badge tier-na"><span class="dot" style="background:#6b7280"></span>No data</span>`;
+  return `<span class="badge ${tier.cls}"><span class="dot" style="background:${tier.color}"></span>${tier.name}</span>`;
+}
+
+// ---------------------------------------------------------------------------
+// Apps Script calls (plain GET — Apps Script web apps don't require CORS
+// preflight for simple GET requests, so this works from any static page)
+// ---------------------------------------------------------------------------
+async function callAppsScript(url, secret, action, extraParams) {
+  const params = new URLSearchParams({ action, secret, ...(extraParams || {}) });
+  const resp = await fetch(`${url}?${params.toString()}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} calling ${action}`);
+  const data = await resp.json();
+  if (data.error) throw new Error(`Apps Script error (${action}): ${data.error}`);
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Parse the scoreboard tab: find the header row by matching known column
+// labels, then map every subsequent row into a clean record. This doesn't
+// assume fixed column letters, so it should keep working even if the sheet
+// layout shifts.
+// ---------------------------------------------------------------------------
+function findHeaderRow(values) {
+  const patterns = { date: /date/i, internet: /internet/i, ap: /access\s*points?/i,
+                      switches: /switch/i, cctv: /cctv/i, bio: /biometric/i,
+                      totalDT: /total.*dt|total.*downtime/i, uptime: /uptime/i };
+  let best = { rowIdx: -1, hits: 0, cols: {} };
+  for (let r = 0; r < Math.min(values.length, 30); r++) {
+    const cols = {};
+    let hits = 0;
+    values[r].forEach((cell, c) => {
+      const text = String(cell || "");
+      for (const key in patterns) {
+        if (patterns[key].test(text) && cols[key] === undefined) {
+          cols[key] = c;
+          hits++;
+        }
+      }
+    });
+    if (hits > best.hits) best = { rowIdx: r, hits, cols };
+  }
+  return best.hits >= 3 ? best : null;
+}
+
+function parsePercent(raw) {
+  if (raw === "" || raw === null || raw === undefined) return null;
+  if (typeof raw === "string" && raw.trim().endsWith("%")) {
+    const n = parseFloat(raw);
+    return isNaN(n) ? null : n;
+  }
+  const n = parseFloat(raw);
+  if (isNaN(n)) return null;
+  return n <= 1 ? n * 100 : n; // handles 0.998 vs 99.8 style formatting
+}
+
+function parseNumber(raw) {
+  if (raw === "" || raw === null || raw === undefined) return null;
+  const n = parseFloat(raw);
+  return isNaN(n) ? null : n;
+}
+
+function parseScoreboard(values) {
+  const header = findHeaderRow(values);
+  if (!header) throw new Error("Couldn't find a header row in the scoreboard tab (looking for columns like Date, Internet, Access Points, Switches, CCTV, Biometrics, Uptime).");
+  const rows = [];
+  for (let r = header.rowIdx + 1; r < values.length; r++) {
+    const row = values[r];
+    const dateRaw = header.cols.date !== undefined ? row[header.cols.date] : "";
+    if (!dateRaw) continue;
+    rows.push({
+      date: String(dateRaw),
+      internet: header.cols.internet !== undefined ? parseNumber(row[header.cols.internet]) : null,
+      ap: header.cols.ap !== undefined ? parseNumber(row[header.cols.ap]) : null,
+      switches: header.cols.switches !== undefined ? parseNumber(row[header.cols.switches]) : null,
+      cctv: header.cols.cctv !== undefined ? parseNumber(row[header.cols.cctv]) : null,
+      bio: header.cols.bio !== undefined ? parseNumber(row[header.cols.bio]) : null,
+      totalDT: header.cols.totalDT !== undefined ? parseNumber(row[header.cols.totalDT]) : null,
+      uptimePct: header.cols.uptime !== undefined ? parsePercent(row[header.cols.uptime]) : null,
+    });
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Parse RawStatusLog for a "live status right now" snapshot: take the most
+// recent timestamp per device, count online/offline by category, and keep
+// the per-device detail (name, host, IP, status) so a card can be clicked
+// to show exactly which devices are in that category.
+// ---------------------------------------------------------------------------
+function parseLiveStatus(values) {
+  if (!values || values.length < 2) return { counts: {}, devices: {} };
+  const latestByDevice = new Map();
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    const ts = row[0], host = row[1], name = row[2], mac = row[3], type = row[4], status = row[5], ip = row[6];
+    if (!ts || !type) continue;
+    const key = `${type}::${name}::${mac}`;
+    const existing = latestByDevice.get(key);
+    if (!existing || ts > existing.ts) {
+      latestByDevice.set(key, {
+        ts, type, name: name || "(unnamed)", host: host || "",
+        ip: ip || "", status: String(status || "").toLowerCase(),
+      });
+    }
+  }
+  const counts = {};
+  const devices = {};
+  latestByDevice.forEach((d) => {
+    if (!counts[d.type]) counts[d.type] = { online: 0, total: 0 };
+    counts[d.type].total++;
+    if (d.status === "online") counts[d.type].online++;
+    if (!devices[d.type]) devices[d.type] = [];
+    devices[d.type].push(d);
+  });
+  Object.values(devices).forEach((list) => list.sort((a, b) => a.name.localeCompare(b.name)));
+  return { counts, devices };
+}
+
+// ---------------------------------------------------------------------------
+// Roll daily rows up into monthly / quarterly / yearly periods. Downtime
+// minutes sum across the period; uptime % is the simple average of the
+// days that have a value (matches how the scorecard treats each business
+// day as one equally-weighted sample).
+// ---------------------------------------------------------------------------
+function periodKeyAndLabel(dateStr, granularity) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d)) return null;
+  const y = d.getFullYear(), m = d.getMonth();
+  if (granularity === "weekly") {
+    // Fiscal-style "13-week quarter": week 1 starts on the first day of the
+    // quarter, so each quarter buckets into (up to) 13 weekly periods --
+    // matches how a quarterly uptime target is usually tracked week-by-week.
+    const q = Math.floor(m / 3) + 1;
+    const quarterStart = new Date(y, (q - 1) * 3, 1);
+    const daysSinceQuarterStart = Math.round((d - quarterStart) / 86400000);
+    const weekNum = Math.floor(daysSinceQuarterStart / 7) + 1;
+    return { key: `${y}-Q${q}-W${String(weekNum).padStart(2, "0")}`, label: `Q${q} ${y} · Week ${weekNum}` };
+  }
+  if (granularity === "monthly") {
+    return { key: `${y}-${String(m + 1).padStart(2, "0")}`, label: d.toLocaleDateString(undefined, { month: "long", year: "numeric" }) };
+  }
+  if (granularity === "quarterly") {
+    const q = Math.floor(m / 3) + 1;
+    return { key: `${y}-Q${q}`, label: `Q${q} ${y}` };
+  }
+  if (granularity === "yearly") {
+    return { key: `${y}`, label: `${y}` };
+  }
+  return { key: dateStr, label: dateStr }; // daily
+}
+
+function aggregateRows(rows, granularity) {
+  if (granularity === "daily") return rows;
+
+  const groups = new Map();
+  const numericFields = ["internet", "ap", "switches", "cctv", "bio", "totalDT"];
+
+  rows.forEach((r) => {
+    const period = periodKeyAndLabel(r.date, granularity);
+    if (!period) return;
+    if (!groups.has(period.key)) {
+      groups.set(period.key, {
+        key: period.key, date: period.label,
+        internet: 0, ap: 0, switches: 0, cctv: 0, bio: 0, totalDT: 0,
+        _hasAnyMinutes: false, _uptimeSum: 0, _uptimeCount: 0, _dailyRows: [],
+      });
+    }
+    const g = groups.get(period.key);
+    numericFields.forEach((f) => {
+      if (r[f] !== null && r[f] !== undefined) {
+        g[f] += r[f];
+        g._hasAnyMinutes = true;
+      }
+    });
+    if (r.uptimePct !== null && r.uptimePct !== undefined) {
+      g._uptimeSum += r.uptimePct;
+      g._uptimeCount += 1;
+    }
+    g._dailyRows.push(r);
+  });
+
+  return Array.from(groups.values())
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map((g) => ({
+      date: g.date,
+      dailyRows: g._dailyRows.slice().sort((a, b) => a.date.localeCompare(b.date)),
+      internet: g._hasAnyMinutes ? g.internet : null,
+      ap: g._hasAnyMinutes ? g.ap : null,
+      switches: g._hasAnyMinutes ? g.switches : null,
+      cctv: g._hasAnyMinutes ? g.cctv : null,
+      bio: g._hasAnyMinutes ? g.bio : null,
+      totalDT: g._hasAnyMinutes ? g.totalDT : null,
+      uptimePct: g._uptimeCount ? g._uptimeSum / g._uptimeCount : null,
+      sampleDays: g._uptimeCount,
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function fmtMin(n) {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return `${n.toFixed(1)}m`;
+}
+function fmtPct(n) {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return `${n.toFixed(2)}%`;
+}
+
+let expandedCategory = null; // persists across re-renders (filter clicks, reloads)
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function renderLiveStatus(liveStatus) {
+  const { counts = {}, devices = {} } = liveStatus || {};
+  const cats = ["Access Point", "Switch", "CCTV", "Biometrics"];
+  const cards = cats.map((cat) => {
+    const d = counts[cat];
+    if (!d) {
+      return `<button type="button" class="card live-card" disabled>
+        <div class="label">${cat}</div>
+        <div class="value" style="color:var(--text-mute); font-size:14px;">No data yet</div>
+      </button>`;
+    }
+    const allOnline = d.online === d.total;
+    const color = allOnline ? "var(--sg)" : (d.online === 0 ? "var(--red)" : "var(--yellow)");
+    const isExpanded = expandedCategory === cat;
+    return `<button type="button" class="card live-card ${isExpanded ? "expanded" : ""}" data-toggle-category="${cat}">
+      <div class="label">${cat}</div>
+      <div class="value" style="color:${color}">${d.online}/${d.total}</div>
+      <div class="sub-value">online right now &middot; click for details</div>
+    </button>`;
+  });
+
+  let detailPanel = "";
+  if (expandedCategory && devices[expandedCategory]) {
+    const rows = devices[expandedCategory].map((dev) => {
+      const statusColor = dev.status === "online" ? "var(--sg)" : "var(--red)";
+      return `<tr>
+        <td>${escapeHtml(dev.name)}</td>
+        <td>${escapeHtml(dev.host) || "—"}</td>
+        <td class="mono">${escapeHtml(dev.ip) || "—"}</td>
+        <td><span style="color:${statusColor}">${escapeHtml(dev.status)}</span></td>
+      </tr>`;
+    }).join("");
+    detailPanel = `<div class="device-panel">
+      <table>
+        <thead><tr><th>Device Name</th><th>Host</th><th>IP Address</th><th>Status</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" class="msg">No devices found for this category.</td></tr>`}</tbody>
+      </table>
+    </div>`;
+  }
+
+  return `<section>
+    <h2>Live status</h2>
+    <div class="section-note">
+      Real device status pulled directly from your UDM SE, refreshed every ~10 minutes. This is separate
+      from the downtime numbers in the reports below, which are only calculated once a night for the
+      previous day, and only count outages during business hours (Mon&ndash;Fri, 8:00 AM&ndash;5:30 PM).
+    </div>
+    <div class="grid">${cards.join("")}</div>${detailPanel}
+  </section>`;
+}
+
+// Shown first, above everything else -- the one number you glance at to
+// know "are we OK right now" before digging into the period breakdown.
+function renderLatestDayHero(rows) {
+  const withUptime = rows.filter((r) => r.uptimePct !== null);
+  const latest = withUptime[withUptime.length - 1];
+  if (!latest) {
+    return `<section><div class="hero"><div class="msg" style="padding:0;">No daily result available yet.</div></div></section>`;
+  }
+  const tier = tierFor(latest.uptimePct);
+  const color = tier ? tier.color : "#6b7280";
+  return `<section>
+    <div class="hero" style="border-left-color:${color}">
+      <div class="hero-label">Latest day result &middot; ${latest.date}</div>
+      <div class="hero-value">
+        <span class="hero-pct">${fmtPct(latest.uptimePct)}</span>
+        ${tierBadge(tier)}
+      </div>
+      <div class="hero-sub">
+        Internet ${fmtMin(latest.internet)} &middot; Access Points ${fmtMin(latest.ap)} &middot;
+        Switches ${fmtMin(latest.switches)} &middot; CCTV ${fmtMin(latest.cctv)} &middot;
+        Biometrics ${fmtMin(latest.bio)} &middot; Total DT ${fmtMin(latest.totalDT)}
+      </div>
+    </div>
+  </section>`;
+}
+
+function renderSummary(rows) {
+  const withUptime = rows.filter((r) => r.uptimePct !== null);
+  const latest = withUptime[withUptime.length - 1];
+  const last30 = withUptime.slice(-30);
+  const avg30 = last30.length ? last30.reduce((s, r) => s + r.uptimePct, 0) / last30.length : null;
+  const worst30 = last30.length ? last30.reduce((min, r) => r.uptimePct < min.uptimePct ? r : min, last30[0]) : null;
+
+  return `<section><h2>Summary</h2><div class="grid">
+    <div class="card">
+      <div class="label">Latest day (${latest ? latest.date : "—"})</div>
+      <div class="value">${latest ? fmtPct(latest.uptimePct) : "—"}</div>
+      <div class="sub-value">${tierBadge(latest ? tierFor(latest.uptimePct) : null)}</div>
+    </div>
+    <div class="card">
+      <div class="label">30-day average uptime</div>
+      <div class="value">${avg30 !== null ? fmtPct(avg30) : "—"}</div>
+      <div class="sub-value">${tierBadge(avg30 !== null ? tierFor(avg30) : null)}</div>
+    </div>
+    <div class="card">
+      <div class="label">Worst day (last 30)</div>
+      <div class="value">${worst30 ? fmtPct(worst30.uptimePct) : "—"}</div>
+      <div class="sub-value">${worst30 ? worst30.date : "—"}</div>
+    </div>
+    <div class="card">
+      <div class="label">Days tracked</div>
+      <div class="value">${withUptime.length}</div>
+      <div class="sub-value">with a computed uptime %</div>
+    </div>
+  </div>
+  <div class="legend">
+    ${TIERS.map(t => `<span><span class="dot" style="background:${t.color}"></span>${t.name} ≥ ${t.min}%</span>`).join("")}
+  </div>
+  </section>`;
+}
+
+const GRANULARITY_LABELS = { daily: "Daily", weekly: "Weekly (13-week)", monthly: "Monthly", quarterly: "Quarterly", yearly: "Yearly" };
+const CHART_WINDOW = { daily: 60, weekly: 13, monthly: 24, quarterly: 16, yearly: 10 };
+
+function renderChart(periodRows, granularity) {
+  const withUptime = periodRows.filter((r) => r.uptimePct !== null).slice(-(CHART_WINDOW[granularity] || 60));
+  if (!withUptime.length) return "";
+  const w = Math.max(withUptime.length * (granularity === "daily" ? 14 : 40), 400), h = 160, pad = 24;
+  const minVal = Math.min(85, ...withUptime.map(r => r.uptimePct));
+  const scaleY = (v) => h - pad - ((v - minVal) / (100 - minVal)) * (h - pad * 1.5);
+  const barW = granularity === "daily" ? 8 : 22;
+  const bars = withUptime.map((r, i) => {
+    const x = i * (w / withUptime.length) + 10;
+    const y = scaleY(r.uptimePct);
+    const tier = tierFor(r.uptimePct);
+    return `<rect x="${x}" y="${y}" width="${barW}" height="${h - pad - y}" fill="${tier.color}" rx="2"><title>${r.date}: ${fmtPct(r.uptimePct)}</title></rect>`;
+  }).join("");
+  return `<section><h2>${GRANULARITY_LABELS[granularity]} uptime trend (last ${withUptime.length})</h2>
+    <div class="chart-wrap"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${bars}</svg></div>
+  </section>`;
+}
+
+let expandedPeriodKey = null; // which period row's daily drill-down is open (null = none)
+
+function renderTable(periodRows, granularity) {
+  const sorted = periodRows.slice().reverse();
+  const periodLabel = granularity === "weekly" ? "Week" : granularity === "monthly" ? "Month" : granularity === "quarterly" ? "Quarter" : granularity === "yearly" ? "Year" : "Date";
+  const showSampleDays = granularity !== "daily";
+  const drillable = granularity !== "daily"; // daily rows have nothing further to drill into
+  const colCount = showSampleDays ? 10 : 9;
+
+  const trs = sorted.map((r) => {
+    const tier = tierFor(r.uptimePct);
+    const isExpanded = drillable && expandedPeriodKey === r.date;
+    const rowAttrs = drillable ? `class="period-row ${isExpanded ? "expanded" : ""}" data-toggle-period="${escapeHtml(r.date)}"` : "";
+    const arrow = drillable ? `<span class="expand-arrow">${isExpanded ? "▾" : "▸"}</span>` : "";
+    const mainRow = `<tr ${rowAttrs}>
+      <td>${arrow}${escapeHtml(r.date)}</td>
+      <td>${tierBadge(tier)}</td>
+      <td class="num">${fmtPct(r.uptimePct)}</td>
+      ${showSampleDays ? `<td class="num">${r.sampleDays ?? "—"}</td>` : ""}
+      <td class="num">${fmtMin(r.internet)}</td>
+      <td class="num">${fmtMin(r.ap)}</td>
+      <td class="num">${fmtMin(r.switches)}</td>
+      <td class="num">${fmtMin(r.cctv)}</td>
+      <td class="num">${fmtMin(r.bio)}</td>
+      <td class="num">${fmtMin(r.totalDT)}</td>
+    </tr>`;
+
+    if (!isExpanded || !r.dailyRows || !r.dailyRows.length) return mainRow;
+
+    const dayRows = r.dailyRows.map((day) => {
+      const dayTier = tierFor(day.uptimePct);
+      return `<tr class="drill-row">
+        <td>&nbsp;&nbsp;&nbsp;${escapeHtml(day.date)}</td>
+        <td>${tierBadge(dayTier)}</td>
+        <td class="num">${fmtPct(day.uptimePct)}</td>
+        ${showSampleDays ? `<td></td>` : ""}
+        <td class="num">${fmtMin(day.internet)}</td>
+        <td class="num">${fmtMin(day.ap)}</td>
+        <td class="num">${fmtMin(day.switches)}</td>
+        <td class="num">${fmtMin(day.cctv)}</td>
+        <td class="num">${fmtMin(day.bio)}</td>
+        <td class="num">${fmtMin(day.totalDT)}</td>
+      </tr>`;
+    }).join("");
+
+    return mainRow + dayRows;
+  }).join("");
+
+  return `<section><h2>${GRANULARITY_LABELS[granularity]} reports${drillable ? ` <span style="font-weight:400; font-size:12px; color:var(--text-mute);">(click a row to see its days)</span>` : ""}</h2>
+    <table>
+      <thead><tr>
+        <th>${periodLabel}</th><th>Tier</th><th class="num">Uptime %</th>
+        ${showSampleDays ? `<th class="num">Days</th>` : ""}
+        <th class="num">Internet</th><th class="num">Access Points</th><th class="num">Switches</th>
+        <th class="num">CCTV</th><th class="num">Biometrics</th><th class="num">Total DT</th>
+      </tr></thead>
+      <tbody>${trs || `<tr><td colspan="${showSampleDays ? 10 : 9}" class="msg">No rows found yet.</td></tr>`}</tbody>
+    </table>
+  </section>`;
+}
+
+// ---------------------------------------------------------------------------
+// Main load + render
+// ---------------------------------------------------------------------------
+let lastRows = null;        // daily rows from the most recent successful load
+let lastLiveStatus = null;
+let currentGranularity = "weekly"; // default view: 13-week-per-quarter breakdown
+
+function renderApp() {
+  if (!lastRows) return;
+  const app = $("app");
+  const periodRows = aggregateRows(lastRows, currentGranularity);
+  app.innerHTML =
+    renderLatestDayHero(lastRows) +          // always first: today's/yesterday's result at a glance
+    renderLiveStatus(lastLiveStatus || {}) +
+    renderSummary(lastRows) +                // summary always reflects daily data — "latest day" only makes sense at daily grain
+    renderChart(periodRows, currentGranularity) +
+    renderTable(periodRows, currentGranularity);
+}
+
+async function loadDashboard() {
+  const url = $("cfg-url").value.trim();
+  const secret = $("cfg-secret").value.trim();
+  const tab = $("cfg-tab").value.trim() || "Sheet1";
+  const errorSlot = $("error-slot");
+  const app = $("app");
+  const statusLine = $("status-line");
+  const filterBar = $("filter-bar");
+  errorSlot.innerHTML = "";
+
+  if (!url || !secret) {
+    errorSlot.innerHTML = `<div class="error-box">Enter both the Apps Script URL and secret first.</div>`;
+    return;
+  }
+
+  saveConfig({ url, secret, tab });
+  statusLine.textContent = "Loading…";
+  app.innerHTML = `<div class="msg">Loading…</div>`;
+  filterBar.style.display = "none";
+
+  try {
+    const [scoreboardData, rawLogData] = await Promise.all([
+      callAppsScript(url, secret, "getSheetData", { tab }),
+      callAppsScript(url, secret, "getRawLog"),
+    ]);
+
+    lastRows = parseScoreboard(scoreboardData.values || []);
+    lastLiveStatus = parseLiveStatus(rawLogData.rows || []);
+    expandedCategory = null;
+    expandedPeriodKey = null;
+
+    filterBar.style.display = "flex";
+    renderApp();
+
+    statusLine.textContent = `Loaded ${lastRows.length} days · ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    app.innerHTML = "";
+    filterBar.style.display = "none";
+    errorSlot.innerHTML = `<div class="error-box">${err.message}</div>`;
+    statusLine.textContent = "Failed to load";
+  }
+}
+
+$("cfg-load").addEventListener("click", loadDashboard);
+
+$("filter-bar").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-granularity]");
+  if (!btn) return;
+  currentGranularity = btn.dataset.granularity;
+  expandedPeriodKey = null; // switching periods invalidates whatever was drilled into
+  $("filter-bar").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
+  renderApp();
+});
+
+// #app itself is never replaced (only its innerHTML), so a listener attached
+// here survives every re-render -- toggles the clicked live-status card's
+// device-detail panel open/closed, and toggles a period row's daily drill-down.
+$("app").addEventListener("click", (e) => {
+  const catBtn = e.target.closest("button[data-toggle-category]");
+  if (catBtn) {
+    const cat = catBtn.dataset.toggleCategory;
+    expandedCategory = expandedCategory === cat ? null : cat;
+    renderApp();
+    return;
+  }
+
+  const periodRow = e.target.closest("tr[data-toggle-period]");
+  if (periodRow) {
+    const key = periodRow.dataset.togglePeriod;
+    expandedPeriodKey = expandedPeriodKey === key ? null : key;
+    renderApp();
+  }
+});
+
+// auto-load if we already have saved config
+if ($("cfg-url").value && $("cfg-secret").value) {
+  loadDashboard();
+}
+</script>
+</body>
+</html>
