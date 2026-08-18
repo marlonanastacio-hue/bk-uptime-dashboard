@@ -609,20 +609,121 @@ function computeQuarterWeeklyAverages(rows) {
   return out;
 }
 
-// Shown first, above everything else -- the one number you glance at to
-// know "are we OK right now" before digging into the period breakdown.
-// Right side of the same card holds "where are we right now" context:
-// current quarter/week, this quarter's average weekly downtime per
-// category, and when the automation last actually ran.
-function renderLatestDayHero(rows, liveStatus) {
-  const withUptime = rows.filter((r) => r.uptimePct !== null);
-  const latest = withUptime[withUptime.length - 1];
+// ---------------------------------------------------------------------------
+// Hero card -- three columns: latest day result (left), the currently
+// selected report-period's result with a breakdown of its sub-periods
+// (middle -- this is what the "Report period" filter buttons drive), and
+// "where are we right now" context: current quarter/week, average weekly
+// downtime, and last-run timestamps (right).
+// ---------------------------------------------------------------------------
+function currentPeriodKey(granularity, now = new Date()) {
+  const y = now.getFullYear(), m = now.getMonth();
+  if (granularity === "weekly") {
+    const q = Math.floor(m / 3) + 1;
+    const quarterStart = new Date(y, (q - 1) * 3, 1);
+    const days = Math.round((now - quarterStart) / 86400000);
+    const week = Math.floor(days / 7) + 1;
+    return `${y}-Q${q}-W${String(week).padStart(2, "0")}`;
+  }
+  if (granularity === "monthly") return `${y}-${String(m + 1).padStart(2, "0")}`;
+  if (granularity === "quarterly") { const q = Math.floor(m / 3) + 1; return `${y}-Q${q}`; }
+  if (granularity === "yearly") return `${y}`;
+  return null;
+}
+
+function getCurrentPeriodGroup(rows, granularity) {
+  const key = currentPeriodKey(granularity);
+  if (!key) return null;
+  return aggregateRows(rows, granularity).find((g) => g.key === key) || null;
+}
+
+// Strips the "Q3 2026 · " prefix off a weekly label when it's shown inside
+// a monthly breakdown, where restating the quarter/year is redundant.
+function shortWeekLabel(label) {
+  const m = /Week\s*(\d+)/.exec(label);
+  return m ? `Week ${m[1]}` : label;
+}
+
+function renderPeriodSummaryBlock(title, group) {
+  if (!group) {
+    return `<div class="hero-label">${escapeHtml(title)}</div>
+      <div class="msg" style="padding:8px 0 0; text-align:left;">No data yet for this period.</div>`;
+  }
+  const tier = tierFor(group.uptimePct);
+  return `
+    <div class="hero-label">${escapeHtml(title)}</div>
+    <div class="hero-value" style="margin-bottom:6px;">
+      <span class="hero-pct" style="font-size:28px;">${fmtPct(group.uptimePct)}</span>
+      ${tierBadge(tier)}
+    </div>
+    <div class="hero-sub">
+      Internet ${fmtMin(group.internet)} &middot; AP ${fmtMin(group.ap)} &middot; Switches ${fmtMin(group.switches)}<br/>
+      CCTV ${fmtMin(group.cctv)} &middot; Biometrics ${fmtMin(group.bio)} &middot; Total DT ${fmtMin(group.totalDT)}
+    </div>`;
+}
+
+function renderBreakdownTable(label, breakdownRows) {
+  if (!breakdownRows || !breakdownRows.length) {
+    return `<div class="msg" style="padding:8px 0 0; text-align:left;">No ${escapeHtml(label.toLowerCase())} data yet.</div>`;
+  }
+  const rows = breakdownRows.map((r) => `<tr>
+      <td>${escapeHtml(label === "Week" ? shortWeekLabel(r.date) : r.date)}</td>
+      <td>${tierBadge(tierFor(r.uptimePct))}</td>
+      <td class="num">${fmtPct(r.uptimePct)}</td>
+      <td class="num">${fmtMin(r.totalDT)}</td>
+    </tr>`).join("");
+  return `<div style="overflow-x:auto; margin-top:8px;"><table>
+      <thead><tr><th>${escapeHtml(label)}</th><th>Tier</th><th class="num">Uptime %</th><th class="num">Total DT</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+function aggregateCustomRange(rows, start, end) {
+  const filtered = rows.filter((r) => r.date >= start && r.date <= end)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const numericFields = ["internet", "ap", "switches", "cctv", "bio", "totalDT"];
+  const sums = { internet: 0, ap: 0, switches: 0, cctv: 0, bio: 0, totalDT: 0 };
+  let hasAny = false, uptimeSum = 0, uptimeCount = 0;
+  filtered.forEach((r) => {
+    numericFields.forEach((f) => { if (r[f] !== null && r[f] !== undefined) { sums[f] += r[f]; hasAny = true; } });
+    if (r.uptimePct !== null && r.uptimePct !== undefined) { uptimeSum += r.uptimePct; uptimeCount++; }
+  });
+  return {
+    date: `${start} to ${end}`,
+    internet: hasAny ? sums.internet : null, ap: hasAny ? sums.ap : null, switches: hasAny ? sums.switches : null,
+    cctv: hasAny ? sums.cctv : null, bio: hasAny ? sums.bio : null, totalDT: hasAny ? sums.totalDT : null,
+    uptimePct: uptimeCount ? uptimeSum / uptimeCount : null,
+    dailyRows: filtered,
+  };
+}
+
+function renderDailyRangePanel(rows, customRange) {
+  const { start, end } = customRange || {};
+  const group = (start && end) ? aggregateCustomRange(rows, start, end) : null;
+  const inputStyle = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:5px 8px; font-size:12px;";
+  return `
+    <div style="flex:1; min-width:260px; border-left:1px solid var(--border); padding-left:24px;">
+      <div class="hero-label">Pick a date range</div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+        <input type="date" id="range-start" value="${start ? escapeHtml(start) : ""}" style="${inputStyle}" />
+        <span style="color:var(--text-mute); font-size:12px;">to</span>
+        <input type="date" id="range-end" value="${end ? escapeHtml(end) : ""}" style="${inputStyle}" />
+        <button type="button" id="range-apply" style="background:#2563eb; color:white; border:none; border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer;">Show</button>
+      </div>
+      ${group
+        ? renderPeriodSummaryBlock(`Result: ${group.date}`, group.dailyRows.length ? group : null) + renderBreakdownTable("Date", group.dailyRows)
+        : `<div class="msg" style="padding:8px 0 0; text-align:left;">Pick a start and end date, then click Show.</div>`}
+    </div>`;
+}
+
+function renderCurrentPeriodPanel(rows, liveStatus) {
   const cur = getCurrentQuarterWeek();
   const avgs = computeQuarterWeeklyAverages(rows);
+  const withUptime = rows.filter((r) => r.uptimePct !== null);
+  const latest = withUptime[withUptime.length - 1];
   const lastPoll = liveStatus && liveStatus.lastPollTs;   // poll_devices.py (Access Points/Switches)
   const lastPing = liveStatus && liveStatus.lastPingTs;   // ping_devices.py (CCTV/Biometrics)
-
-  const rightPanel = `
+  return `
     <div style="flex:1; min-width:260px; border-left:1px solid var(--border); padding-left:24px;">
       <div class="hero-label">Current period</div>
       <div style="font-size:19px; font-weight:700; margin-bottom:10px;">Q${cur.quarter} ${cur.year} &middot; Week ${cur.week}</div>
@@ -642,33 +743,64 @@ function renderLatestDayHero(rows, liveStatus) {
         Last ping (CCTV/Biometrics): <strong style="color:var(--text-dim);">${fmtDateTime(lastPing)}</strong>
       </div>
     </div>`;
+}
 
-  if (!latest) {
-    return `<section>
-      <div class="hero" style="display:flex; gap:24px; flex-wrap:wrap;">
-        <div style="flex:1; min-width:200px;"><div class="msg" style="padding:0; text-align:left;">No daily result available yet.</div></div>
-        ${rightPanel}
-      </div>
-    </section>`;
+// The middle column -- driven by the "Report period" filter buttons.
+// Weekly/Monthly/Quarterly/Yearly show the CURRENT such period's result
+// plus a breakdown of its next-finer sub-periods (quarter -> months,
+// month -> weeks, week -> days). Daily is different: instead of one day,
+// it's a calendar range picker that aggregates whatever range you pick.
+function renderPeriodResultPanel(rows, granularity, customRange) {
+  if (granularity === "daily") return renderDailyRangePanel(rows, customRange);
+
+  const group = getCurrentPeriodGroup(rows, granularity);
+  const titles = { weekly: "This week", monthly: "This month", quarterly: "This quarter", yearly: "This year" };
+  const breakdownLabels = { weekly: "Day", monthly: "Week", quarterly: "Month", yearly: "Quarter" };
+
+  let breakdown = [];
+  if (group && group.dailyRows) {
+    if (granularity === "weekly") breakdown = group.dailyRows;
+    else if (granularity === "monthly") breakdown = aggregateRows(group.dailyRows, "weekly");
+    else if (granularity === "quarterly") breakdown = aggregateRows(group.dailyRows, "monthly");
+    else if (granularity === "yearly") breakdown = aggregateRows(group.dailyRows, "quarterly");
   }
 
-  const tier = tierFor(latest.uptimePct);
+  const title = titles[granularity] + (group ? ` (${group.date})` : "");
+  return `
+    <div style="flex:1; min-width:260px; border-left:1px solid var(--border); padding-left:24px;">
+      ${renderPeriodSummaryBlock(title, group)}
+      ${renderBreakdownTable(breakdownLabels[granularity], breakdown)}
+    </div>`;
+}
+
+// Shown first, above everything else -- the three-column card you glance
+// at to know "are we OK right now" (left), "how's the period I picked
+// doing" (middle), and "where does this quarter/week stand" (right).
+function renderHero(rows, liveStatus, granularity, customRange) {
+  const withUptime = rows.filter((r) => r.uptimePct !== null);
+  const latest = withUptime[withUptime.length - 1];
+  const tier = latest ? tierFor(latest.uptimePct) : null;
   const color = tier ? tier.color : "#6b7280";
+
+  const leftCol = latest ? `
+    <div style="flex:1; min-width:220px;">
+      <div class="hero-label">Latest day result &middot; ${latest.date}</div>
+      <div class="hero-value">
+        <span class="hero-pct">${fmtPct(latest.uptimePct)}</span>
+        ${tierBadge(tier)}
+      </div>
+      <div class="hero-sub">
+        Internet ${fmtMin(latest.internet)} &middot; Access Points ${fmtMin(latest.ap)} &middot;
+        Switches ${fmtMin(latest.switches)} &middot; CCTV ${fmtMin(latest.cctv)} &middot;
+        Biometrics ${fmtMin(latest.bio)} &middot; Total DT ${fmtMin(latest.totalDT)}
+      </div>
+    </div>` : `<div style="flex:1; min-width:200px;"><div class="msg" style="padding:0; text-align:left;">No daily result available yet.</div></div>`;
+
   return `<section>
     <div class="hero" style="border-left-color:${color}; display:flex; gap:24px; flex-wrap:wrap; justify-content:space-between;">
-      <div style="flex:1; min-width:260px;">
-        <div class="hero-label">Latest day result &middot; ${latest.date}</div>
-        <div class="hero-value">
-          <span class="hero-pct">${fmtPct(latest.uptimePct)}</span>
-          ${tierBadge(tier)}
-        </div>
-        <div class="hero-sub">
-          Internet ${fmtMin(latest.internet)} &middot; Access Points ${fmtMin(latest.ap)} &middot;
-          Switches ${fmtMin(latest.switches)} &middot; CCTV ${fmtMin(latest.cctv)} &middot;
-          Biometrics ${fmtMin(latest.bio)} &middot; Total DT ${fmtMin(latest.totalDT)}
-        </div>
-      </div>
-      ${rightPanel}
+      ${leftCol}
+      ${renderPeriodResultPanel(rows, granularity, customRange)}
+      ${renderCurrentPeriodPanel(rows, liveStatus)}
     </div>
   </section>`;
 }
@@ -708,106 +840,22 @@ function renderSummary(rows) {
   </section>`;
 }
 
-const GRANULARITY_LABELS = { daily: "Daily", weekly: "Weekly (13-week)", monthly: "Monthly", quarterly: "Quarterly", yearly: "Yearly" };
-const CHART_WINDOW = { daily: 60, weekly: 13, monthly: 24, quarterly: 16, yearly: 10 };
-
-function renderChart(periodRows, granularity) {
-  const withUptime = periodRows.filter((r) => r.uptimePct !== null).slice(-(CHART_WINDOW[granularity] || 60));
-  if (!withUptime.length) return "";
-  const w = Math.max(withUptime.length * (granularity === "daily" ? 14 : 40), 400), h = 160, pad = 24;
-  const minVal = Math.min(85, ...withUptime.map(r => r.uptimePct));
-  const scaleY = (v) => h - pad - ((v - minVal) / (100 - minVal)) * (h - pad * 1.5);
-  const barW = granularity === "daily" ? 8 : 22;
-  const bars = withUptime.map((r, i) => {
-    const x = i * (w / withUptime.length) + 10;
-    const y = scaleY(r.uptimePct);
-    const tier = tierFor(r.uptimePct);
-    return `<rect x="${x}" y="${y}" width="${barW}" height="${h - pad - y}" fill="${tier.color}" rx="2"><title>${r.date}: ${fmtPct(r.uptimePct)}</title></rect>`;
-  }).join("");
-  return `<section><h2>${GRANULARITY_LABELS[granularity]} uptime trend (last ${withUptime.length})</h2>
-    <div class="chart-wrap"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${bars}</svg></div>
-  </section>`;
-}
-
-let expandedPeriodKey = null; // which period row's daily drill-down is open (null = none)
-
-function renderTable(periodRows, granularity) {
-  const sorted = periodRows.slice().reverse();
-  const periodLabel = granularity === "weekly" ? "Week" : granularity === "monthly" ? "Month" : granularity === "quarterly" ? "Quarter" : granularity === "yearly" ? "Year" : "Date";
-  const showSampleDays = granularity !== "daily";
-  const drillable = granularity !== "daily"; // daily rows have nothing further to drill into
-  const colCount = showSampleDays ? 10 : 9;
-
-  const trs = sorted.map((r) => {
-    const tier = tierFor(r.uptimePct);
-    const isExpanded = drillable && expandedPeriodKey === r.date;
-    const rowAttrs = drillable ? `class="period-row ${isExpanded ? "expanded" : ""}" data-toggle-period="${escapeHtml(r.date)}"` : "";
-    const arrow = drillable ? `<span class="expand-arrow">${isExpanded ? "▾" : "▸"}</span>` : "";
-    const mainRow = `<tr ${rowAttrs}>
-      <td>${arrow}${escapeHtml(r.date)}</td>
-      <td>${tierBadge(tier)}</td>
-      <td class="num">${fmtPct(r.uptimePct)}</td>
-      ${showSampleDays ? `<td class="num">${r.sampleDays ?? "—"}</td>` : ""}
-      <td class="num">${fmtMin(r.internet)}</td>
-      <td class="num">${fmtMin(r.ap)}</td>
-      <td class="num">${fmtMin(r.switches)}</td>
-      <td class="num">${fmtMin(r.cctv)}</td>
-      <td class="num">${fmtMin(r.bio)}</td>
-      <td class="num">${fmtMin(r.totalDT)}</td>
-    </tr>`;
-
-    if (!isExpanded || !r.dailyRows || !r.dailyRows.length) return mainRow;
-
-    const dayRows = r.dailyRows.map((day) => {
-      const dayTier = tierFor(day.uptimePct);
-      return `<tr class="drill-row">
-        <td>&nbsp;&nbsp;&nbsp;${escapeHtml(day.date)}</td>
-        <td>${tierBadge(dayTier)}</td>
-        <td class="num">${fmtPct(day.uptimePct)}</td>
-        ${showSampleDays ? `<td></td>` : ""}
-        <td class="num">${fmtMin(day.internet)}</td>
-        <td class="num">${fmtMin(day.ap)}</td>
-        <td class="num">${fmtMin(day.switches)}</td>
-        <td class="num">${fmtMin(day.cctv)}</td>
-        <td class="num">${fmtMin(day.bio)}</td>
-        <td class="num">${fmtMin(day.totalDT)}</td>
-      </tr>`;
-    }).join("");
-
-    return mainRow + dayRows;
-  }).join("");
-
-  return `<section><h2>${GRANULARITY_LABELS[granularity]} reports${drillable ? ` <span style="font-weight:400; font-size:12px; color:var(--text-mute);">(click a row to see its days)</span>` : ""}</h2>
-    <table>
-      <thead><tr>
-        <th>${periodLabel}</th><th>Tier</th><th class="num">Uptime %</th>
-        ${showSampleDays ? `<th class="num">Days</th>` : ""}
-        <th class="num">Internet</th><th class="num">Access Points</th><th class="num">Switches</th>
-        <th class="num">CCTV</th><th class="num">Biometrics</th><th class="num">Total DT</th>
-      </tr></thead>
-      <tbody>${trs || `<tr><td colspan="${showSampleDays ? 10 : 9}" class="msg">No rows found yet.</td></tr>`}</tbody>
-    </table>
-  </section>`;
-}
-
 // ---------------------------------------------------------------------------
 // Main load + render
 // ---------------------------------------------------------------------------
 let lastRows = null;        // daily rows from the most recent successful load
 let lastLiveStatus = null;
-let currentGranularity = "weekly"; // default view: 13-week-per-quarter breakdown
+let currentGranularity = "weekly"; // which Report period filter button is active
+let customDateRange = { start: null, end: null }; // Daily filter's calendar range picker
 
 function renderApp() {
   if (!lastRows) return;
   const app = $("app");
-  const periodRows = aggregateRows(lastRows, currentGranularity);
   app.innerHTML =
-    renderLatestDayHero(lastRows, lastLiveStatus) +  // latest day + current quarter/week/averages/last-run, all in one card
+    renderHero(lastRows, lastLiveStatus, currentGranularity, customDateRange) + // latest day / selected period result / current quarter-week, all in one card
     renderLiveStatus(lastLiveStatus || {}) +
     renderTopology(lastLiveStatus || {}) +
-    renderSummary(lastRows) +                // summary always reflects daily data — "latest day" only makes sense at daily grain
-    renderChart(periodRows, currentGranularity) +
-    renderTable(periodRows, currentGranularity);
+    renderSummary(lastRows); // summary always reflects daily data — "latest day" only makes sense at daily grain
 }
 
 async function loadDashboard() {
@@ -839,7 +887,7 @@ async function loadDashboard() {
     lastRows = parseScoreboard(scoreboardData.values || []);
     lastLiveStatus = parseLiveStatus(rawLogData.rows || []);
     expandedCategory = null;
-    expandedPeriodKey = null;
+    customDateRange = { start: null, end: null };
 
     filterBar.style.display = "flex";
     renderApp();
@@ -859,14 +907,14 @@ $("filter-bar").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-granularity]");
   if (!btn) return;
   currentGranularity = btn.dataset.granularity;
-  expandedPeriodKey = null; // switching periods invalidates whatever was drilled into
   $("filter-bar").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
   renderApp();
 });
 
 // #app itself is never replaced (only its innerHTML), so a listener attached
 // here survives every re-render -- toggles the clicked live-status card's
-// device-detail panel open/closed, and toggles a period row's daily drill-down.
+// device-detail panel open/closed, and applies the Daily filter's picked
+// calendar range when "Show" is clicked.
 $("app").addEventListener("click", (e) => {
   const catBtn = e.target.closest("button[data-toggle-category]");
   if (catBtn) {
@@ -876,11 +924,14 @@ $("app").addEventListener("click", (e) => {
     return;
   }
 
-  const periodRow = e.target.closest("tr[data-toggle-period]");
-  if (periodRow) {
-    const key = periodRow.dataset.togglePeriod;
-    expandedPeriodKey = expandedPeriodKey === key ? null : key;
-    renderApp();
+  const rangeApply = e.target.closest("#range-apply");
+  if (rangeApply) {
+    const start = $("range-start") ? $("range-start").value : "";
+    const end = $("range-end") ? $("range-end").value : "";
+    if (start && end) {
+      customDateRange = { start, end };
+      renderApp();
+    }
   }
 });
 
