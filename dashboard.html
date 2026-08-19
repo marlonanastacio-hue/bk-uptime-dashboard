@@ -426,6 +426,12 @@ function fmtSpeed(down, up) {
   return `${down}/${up} Mbps`;
 }
 
+function fmtSpeedAvg(down, up) {
+  // Average speed = (download + upload) / 2
+  if (down === null || down === undefined || up === null || up === undefined) return "—";
+  return `${Math.round(((down + up) / 2) * 10) / 10} Mbps`;
+}
+
 let expandedCategory = null; // persists across re-renders (filter clicks, reloads)
 
 function escapeHtml(s) {
@@ -911,8 +917,10 @@ function renderHero(rows, liveStatus, granularity, customRange) {
         Internet ${fmtMin(latest.internet)} &middot; Access Points ${fmtMin(latest.ap)} &middot;
         Switches ${fmtMin(latest.switches)} &middot; CCTV ${fmtMin(latest.cctv)} &middot;
         Biometrics ${fmtMin(latest.bio)} &middot; Total DT ${fmtMin(latest.totalDT)}<br/>
-        Converge (Tower) ${fmtSpeed(latest.towerDownMbps, latest.towerUpMbps)} down/up &middot;
+        Converge (Tower) ${fmtSpeed(latest.towerDownMbps, latest.towerUpMbps)} down/up
+        (avg ${fmtSpeedAvg(latest.towerDownMbps, latest.towerUpMbps)}) &middot;
         PT&amp;T (Marilao) ${fmtSpeed(latest.marilaoDownMbps, latest.marilaoUpMbps)} down/up
+        (avg ${fmtSpeedAvg(latest.marilaoDownMbps, latest.marilaoUpMbps)})
       </div>
     </div>` : `<div style="flex:1; min-width:200px;"><div class="msg" style="padding:0; text-align:left;">No daily result available yet.</div></div>`;
 
