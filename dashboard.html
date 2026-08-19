@@ -565,7 +565,7 @@ function renderTopology(liveStatus, latestRow) {
     <path d="M230,48 L25,48 L25,222 L115,222" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,3"/>
     <path d="M450,48 L620,48 L620,222 L610,222" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,3"/>
 
-    ${topoNode(135, 110, 140, 56, "PLDT", pldtSub, neutral)}
+    ${topoNode(135, 110, 140, 56, "Converge", pldtSub, neutral)}
     ${line(205, 166, 205, 194, true)}
     ${topoNode(115, 194, 180, 56, "UDM SE gateway", "Tower Shadow", topoColor(towerGW))}
     ${line(205, 250, 205, 290, true)}
@@ -592,7 +592,7 @@ function renderTopology(liveStatus, latestRow) {
     <h2>Network topology</h2>
     <div class="section-note">
       Device nodes are live from the same RawStatusLog data as Live status above; gateway color reflects the
-      combined status of everything downstream of it. The PLDT/PT&amp;T throughput shown is UniFi's own reported
+      combined status of everything downstream of it. The Converge/PT&amp;T throughput shown is UniFi's own reported
       business-hours average download/upload (Mbps) for the latest day with data, captured nightly alongside
       Internet downtime &mdash; not an active speed test.
     </div>
@@ -713,7 +713,7 @@ function renderBreakdownTable(label, breakdownRows) {
     </tr>`).join("");
   return `<div style="overflow-x:auto; margin-top:8px;"><table>
       <thead><tr><th>${escapeHtml(label)}</th><th>Tier</th><th class="num">Uptime %</th><th class="num">Total DT</th>
-      ${showSpeed ? `<th class="num">PLDT Mbps</th><th class="num">PT&amp;T Mbps</th>` : ""}</tr></thead>
+      ${showSpeed ? `<th class="num">Converge Mbps</th><th class="num">PT&amp;T Mbps</th>` : ""}</tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }
@@ -739,7 +739,7 @@ function aggregateCustomRange(rows, start, end) {
     internet: hasAny ? sums.internet : null, ap: hasAny ? sums.ap : null, switches: hasAny ? sums.switches : null,
     cctv: hasAny ? sums.cctv : null, bio: hasAny ? sums.bio : null, totalDT: hasAny ? sums.totalDT : null,
     uptimePct: uptimeCount ? uptimeSum / uptimeCount : null,
-    ...avgSpeed, // average PLDT/PT&T Mbps across the range -- used by the PDF export, not shown on-screen elsewhere
+    ...avgSpeed, // average Converge/PT&T Mbps across the range -- used by the PDF export, not shown on-screen elsewhere
     dailyRows: filtered,
   };
 }
@@ -803,7 +803,7 @@ function exportRangeReportPdf(group) {
     `Overall uptime: ${fmtPct(group.uptimePct)}  (Tier: ${tier ? tier.name : "No data"})`,
     `Total downtime -- Internet ${fmtMin(group.internet)}, Access Points ${fmtMin(group.ap)}, Switches ${fmtMin(group.switches)}`,
     `CCTV ${fmtMin(group.cctv)}, Biometrics ${fmtMin(group.bio)}, Total DT ${fmtMin(group.totalDT)}`,
-    `Average ISP throughput -- PLDT (Tower) ${fmtSpeed(group.towerDownMbps, group.towerUpMbps)} down/up`,
+    `Average ISP throughput -- Converge (Tower) ${fmtSpeed(group.towerDownMbps, group.towerUpMbps)} down/up`,
     `PT&T (Marilao) ${fmtSpeed(group.marilaoDownMbps, group.marilaoUpMbps)} down/up`,
   ];
   summaryLines.forEach((line) => { doc.text(line, marginX, y); y += 16; });
@@ -825,7 +825,7 @@ function exportRangeReportPdf(group) {
     margin: { left: marginX, right: marginX },
     styles: { fontSize: 8, cellPadding: 4 },
     headStyles: { fillColor: [37, 99, 235] },
-    head: [["Date", "Tier", "Uptime %", "Internet", "AP", "Switches", "CCTV", "Bio", "Total DT", "PLDT Mbps", "PT&T Mbps"]],
+    head: [["Date", "Tier", "Uptime %", "Internet", "AP", "Switches", "CCTV", "Bio", "Total DT", "Converge Mbps", "PT&T Mbps"]],
     body,
   });
 
@@ -911,7 +911,7 @@ function renderHero(rows, liveStatus, granularity, customRange) {
         Internet ${fmtMin(latest.internet)} &middot; Access Points ${fmtMin(latest.ap)} &middot;
         Switches ${fmtMin(latest.switches)} &middot; CCTV ${fmtMin(latest.cctv)} &middot;
         Biometrics ${fmtMin(latest.bio)} &middot; Total DT ${fmtMin(latest.totalDT)}<br/>
-        PLDT (Tower) ${fmtSpeed(latest.towerDownMbps, latest.towerUpMbps)} down/up &middot;
+        Converge (Tower) ${fmtSpeed(latest.towerDownMbps, latest.towerUpMbps)} down/up &middot;
         PT&amp;T (Marilao) ${fmtSpeed(latest.marilaoDownMbps, latest.marilaoUpMbps)} down/up
       </div>
     </div>` : `<div style="flex:1; min-width:200px;"><div class="msg" style="padding:0; text-align:left;">No daily result available yet.</div></div>`;
