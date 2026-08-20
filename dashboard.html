@@ -314,9 +314,18 @@ function parseLiveStatus(values) {
       });
     }
   }
+  // Drop devices whose latest row isn't from the most recent poll/ping batch.
+  // poll_devices.py and ping_devices.py each write every currently-known
+  // device with one shared timestamp per run, so a device that's been
+  // removed/unadopted in UniFi simply stops appearing in new batches --
+  // its last row just sits in the sheet forever with an ever-staler
+  // timestamp. Without this check that stale row would keep counting as
+  // "live" even though UniFi no longer reports the device at all.
   const counts = {};
   const devices = {};
   latestByDevice.forEach((d) => {
+    if (POLL_TYPES.has(d.type) && d.ts !== lastPollTs) return;
+    if (PING_TYPES.has(d.type) && d.ts !== lastPingTs) return;
     if (!counts[d.type]) counts[d.type] = { online: 0, total: 0 };
     counts[d.type].total++;
     if (d.status === "online") counts[d.type].online++;
