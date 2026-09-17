@@ -308,6 +308,35 @@ function remarksInRange(remarks, start, end) {
   return remarks.filter((r) => r.date >= start && r.date <= end);
 }
 
+function renderRemarkForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  const inputStyle = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:5px 8px; font-size:12px;";
+  return `<section>
+    <h2>Log a downtime remark</h2>
+    <div class="section-note">Type the reason for an outage here -- saved straight to the "Remarks" tab in your sheet.</div>
+    <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-top:10px;">
+      <div>
+        <div class="hero-label" style="margin-bottom:4px;">Date</div>
+        <input type="date" id="remark-date" value="${today}" style="${inputStyle}" />
+      </div>
+      <div>
+        <div class="hero-label" style="margin-bottom:4px;">DT Start</div>
+        <input type="time" id="remark-start" style="${inputStyle}" />
+      </div>
+      <div>
+        <div class="hero-label" style="margin-bottom:4px;">DT End</div>
+        <input type="time" id="remark-end" style="${inputStyle}" />
+      </div>
+      <div style="flex:1; min-width:220px;">
+        <div class="hero-label" style="margin-bottom:4px;">Reason</div>
+        <input type="text" id="remark-reason" placeholder="e.g. ISP outage, scheduled maintenance" style="${inputStyle} width:100%;" />
+      </div>
+      <button type="button" id="remark-submit" style="background:#2563eb; color:white; border:none; border-radius:6px; padding:7px 16px; font-size:13px; cursor:pointer;">Add remark</button>
+    </div>
+    <div id="remark-status" style="margin-top:8px; font-size:12px; color:var(--text-mute);"></div>
+  </section>`;
+}
+
 function renderRemarksTable(remarks) {
   if (!remarks || !remarks.length) {
     return `<div class="hero-label" style="margin-top:14px;">Remarks</div>
@@ -1092,6 +1121,7 @@ function renderApp() {
   const latestRow = withUptime[withUptime.length - 1] || null;
   app.innerHTML =
     renderHero(lastRows, lastLiveStatus, currentGranularity, customDateRange) + // latest day / selected period result / current quarter-week, all in one card
+    renderRemarkForm() +
     renderLiveStatus(lastLiveStatus || {}) +
     renderTopology(lastLiveStatus || {}, latestRow) +
     renderSummary(lastRows); // summary always reflects daily data — "latest day" only makes sense at daily grain
@@ -1182,6 +1212,38 @@ $("app").addEventListener("click", (e) => {
     const group = aggregateCustomRange(lastRows, customDateRange.start, customDateRange.end);
     const remarks = remarksInRange(lastRemarks, customDateRange.start, customDateRange.end);
     exportRangeReportPdf(group, remarks);
+    return;
+  }
+
+  const remarkSubmit = e.target.closest("#remark-submit");
+  if (remarkSubmit) {
+    const date = $("remark-date") ? $("remark-date").value : "";
+    const dtStart = $("remark-start") ? $("remark-start").value : "";
+    const dtEnd = $("remark-end") ? $("remark-end").value : "";
+    const reason = $("remark-reason") ? $("remark-reason").value.trim() : "";
+    const statusEl = $("remark-status");
+    if (!date || !reason) {
+      if (statusEl) { statusEl.textContent = "Date and reason are required."; statusEl.style.color = "var(--red)"; }
+      return;
+    }
+    const url = $("cfg-url").value.trim();
+    const secret = $("cfg-secret").value.trim();
+    remarkSubmit.disabled = true;
+    if (statusEl) { statusEl.textContent = "Saving…"; statusEl.style.color = "var(--text-mute)"; }
+    callAppsScript(url, secret, "appendRemark", { date, dtStart, dtEnd, reason })
+      .then(() => {
+        lastRemarks.push({ date, dtStart, dtEnd, reason });
+        lastRemarks.sort((a, b) => a.date.localeCompare(b.date) || a.dtStart.localeCompare(b.dtStart));
+        renderApp();
+        const newStatusEl = $("remark-status");
+        if (newStatusEl) { newStatusEl.textContent = "Saved."; newStatusEl.style.color = "var(--sg)"; }
+      })
+      .catch((err) => {
+        remarkSubmit.disabled = false;
+        const errStatusEl = $("remark-status");
+        if (errStatusEl) { errStatusEl.textContent = `Failed: ${err.message}`; errStatusEl.style.color = "var(--red)"; }
+      });
+    return;
   }
 });
 
