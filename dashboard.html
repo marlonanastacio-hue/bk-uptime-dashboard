@@ -253,6 +253,79 @@ function parseNumber(raw) {
   return isNaN(n) ? null : n;
 }
 
+// ---------------------------------------------------------------------------
+// Remarks -- a separate, manually-typed sheet tab (Date | DT Start | DT End |
+// Reason) where you log *why* something was down. This is a human judgment
+// call UniFi's API can't provide, so unlike everything else on this
+// dashboard it's entered by hand directly in Google Sheets. Multiple rows
+// per date are fine -- a day can have more than one incident.
+// ---------------------------------------------------------------------------
+function findRemarksHeaderRow(values) {
+  const patterns = { date: /date/i, dtStart: /start/i, dtEnd: /end/i, reason: /reason|remark/i };
+  for (let r = 0; r < Math.min(values.length, 10); r++) {
+    const cols = {};
+    let hits = 0;
+    (values[r] || []).forEach((cell, c) => {
+      const text = String(cell || "");
+      for (const key in patterns) {
+        if (patterns[key].test(text) && cols[key] === undefined) { cols[key] = c; hits++; }
+      }
+    });
+    if (hits >= 2) return { rowIdx: r, cols };
+  }
+  return null;
+}
+
+function parseRemarks(values) {
+  if (!values || values.length < 2) return [];
+  const header = findRemarksHeaderRow(values);
+  if (!header) return [];
+  const out = [];
+  for (let r = header.rowIdx + 1; r < values.length; r++) {
+    const row = values[r];
+    const dateRaw = header.cols.date !== undefined ? row[header.cols.date] : "";
+    const date = dateRaw ? String(dateRaw).slice(0, 10) : "";
+    if (!date) continue;
+    out.push({
+      date,
+      dtStart: header.cols.dtStart !== undefined ? String(row[header.cols.dtStart] || "") : "",
+      dtEnd: header.cols.dtEnd !== undefined ? String(row[header.cols.dtEnd] || "") : "",
+      reason: header.cols.reason !== undefined ? String(row[header.cols.reason] || "") : "",
+    });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.dtStart.localeCompare(b.dtStart));
+}
+
+function dateRangeOfRows(rows) {
+  if (!rows || !rows.length) return { start: null, end: null };
+  let start = rows[0].date, end = rows[0].date;
+  rows.forEach((r) => { if (r.date < start) start = r.date; if (r.date > end) end = r.date; });
+  return { start, end };
+}
+
+function remarksInRange(remarks, start, end) {
+  if (!remarks || !start || !end) return [];
+  return remarks.filter((r) => r.date >= start && r.date <= end);
+}
+
+function renderRemarksTable(remarks) {
+  if (!remarks || !remarks.length) {
+    return `<div class="hero-label" style="margin-top:14px;">Remarks</div>
+      <div class="msg" style="padding:6px 0 0; text-align:left;">No remarks logged for this period.</div>`;
+  }
+  const rows = remarks.map((r) => `<tr>
+      <td>${escapeHtml(r.date)}</td>
+      <td class="num">${escapeHtml(r.dtStart || "—")}</td>
+      <td class="num">${escapeHtml(r.dtEnd || "—")}</td>
+      <td>${escapeHtml(r.reason || "—")}</td>
+    </tr>`).join("");
+  return `<div class="hero-label" style="margin-top:14px;">Remarks</div>
+    <div style="overflow-x:auto; margin-top:6px;"><table>
+      <thead><tr><th>Date</th><th class="num">DT Start</th><th class="num">DT End</th><th>Reason</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
 function parseScoreboard(values) {
   const header = findHeaderRow(values);
   if (!header) throw new Error("Couldn't find a header row in the scoreboard tab (looking for columns like Date, Internet, Access Points, Switches, CCTV, Biometrics, Uptime).");
@@ -763,6 +836,7 @@ function renderDailyRangePanel(rows, customRange) {
   const { start, end } = customRange || {};
   const group = (start && end) ? aggregateCustomRange(rows, start, end) : null;
   const hasData = group && group.dailyRows.length > 0;
+  const rangeRemarks = (start && end) ? remarksInRange(lastRemarks, start, end) : [];
   const inputStyle = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:5px 8px; font-size:12px;";
   return `
     <div style="flex:1; min-width:260px; border-left:1px solid var(--border); padding-left:24px;">
@@ -775,6 +849,7 @@ function renderDailyRangePanel(rows, customRange) {
       </div>
       ${group
         ? renderPeriodSummaryBlock(`Result: ${group.date}`, hasData ? group : null) + renderBreakdownTable("Date", group.dailyRows) +
+          renderRemarksTable(rangeRemarks) +
           `<button type="button" id="export-pdf" ${hasData ? "" : "disabled"} style="margin-top:12px; background:${hasData ? "#2563eb" : "var(--panel-2)"}; color:${hasData ? "white" : "var(--text-mute)"}; border:1px solid ${hasData ? "#2563eb" : "var(--border)"}; border-radius:6px; padding:7px 14px; font-size:13px; cursor:${hasData ? "pointer" : "default"};">Export report (PDF)</button>`
         : `<div class="msg" style="padding:8px 0 0; text-align:left;">Pick a start and end date, then click Show.</div>`}
     </div>`;
@@ -785,7 +860,7 @@ function renderDailyRangePanel(rows, customRange) {
 // whatever date range is currently picked in the Daily filter, using jsPDF
 // (loaded from CDN in <head>). Entirely client-side, no server involved.
 // ---------------------------------------------------------------------------
-function exportRangeReportPdf(group) {
+function exportRangeReportPdf(group, remarks) {
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert("PDF library didn't load (check your internet connection) -- try reloading the page.");
     return;
@@ -844,6 +919,27 @@ function exportRangeReportPdf(group) {
     body,
   });
 
+  let afterTableY = (doc.lastAutoTable && doc.lastAutoTable.finalY) ? doc.lastAutoTable.finalY + 24 : y + 24;
+  doc.setFontSize(13);
+  doc.setFont(undefined, "bold");
+  doc.text("Remarks", marginX, afterTableY);
+  afterTableY += 10;
+
+  if (remarks && remarks.length) {
+    doc.autoTable({
+      startY: afterTableY,
+      margin: { left: marginX, right: marginX },
+      styles: { fontSize: 8, cellPadding: 4 },
+      headStyles: { fillColor: [37, 99, 235] },
+      head: [["Date", "DT Start", "DT End", "Reason"]],
+      body: remarks.map((r) => [r.date, r.dtStart || "—", r.dtEnd || "—", r.reason || "—"]),
+    });
+  } else {
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+    doc.text("No remarks logged for this range.", marginX, afterTableY + 10);
+  }
+
   const fileStart = group.date.split(" to ")[0] || "range";
   const fileEnd = group.date.split(" to ")[1] || "";
   doc.save(`BK-Network-Report_${fileStart}_to_${fileEnd}.pdf`);
@@ -899,10 +995,13 @@ function renderPeriodResultPanel(rows, granularity, customRange) {
   }
 
   const title = titles[granularity] + (group ? ` (${group.date})` : "");
+  const { start: periodStart, end: periodEnd } = dateRangeOfRows(group && group.dailyRows);
+  const periodRemarks = remarksInRange(lastRemarks, periodStart, periodEnd);
   return `
     <div style="flex:1; min-width:260px; border-left:1px solid var(--border); padding-left:24px;">
       ${renderPeriodSummaryBlock(title, group)}
       ${renderBreakdownTable(breakdownLabels[granularity], breakdown)}
+      ${renderRemarksTable(periodRemarks)}
     </div>`;
 }
 
@@ -982,6 +1081,7 @@ function renderSummary(rows) {
 // ---------------------------------------------------------------------------
 let lastRows = null;        // daily rows from the most recent successful load
 let lastLiveStatus = null;
+let lastRemarks = [];       // manually-typed downtime reasons from the "Remarks" tab
 let currentGranularity = "weekly"; // which Report period filter button is active
 let customDateRange = { start: null, end: null }; // Daily filter's calendar range picker
 
@@ -1018,13 +1118,16 @@ async function loadDashboard() {
   filterBar.style.display = "none";
 
   try {
-    const [scoreboardData, rawLogData] = await Promise.all([
+    const [scoreboardData, rawLogData, remarksData] = await Promise.all([
       callAppsScript(url, secret, "getSheetData", { tab }),
       callAppsScript(url, secret, "getRawLog"),
+      // Remarks tab is optional -- if it doesn't exist yet, don't fail the whole load.
+      callAppsScript(url, secret, "getSheetData", { tab: "Remarks" }).catch(() => ({ values: [] })),
     ]);
 
     lastRows = parseScoreboard(scoreboardData.values || []);
     lastLiveStatus = parseLiveStatus(rawLogData.rows || []);
+    lastRemarks = parseRemarks(remarksData.values || []);
     expandedCategory = null;
     customDateRange = { start: null, end: null };
 
@@ -1077,7 +1180,8 @@ $("app").addEventListener("click", (e) => {
   const exportBtn = e.target.closest("#export-pdf");
   if (exportBtn && !exportBtn.disabled && lastRows && customDateRange.start && customDateRange.end) {
     const group = aggregateCustomRange(lastRows, customDateRange.start, customDateRange.end);
-    exportRangeReportPdf(group);
+    const remarks = remarksInRange(lastRemarks, customDateRange.start, customDateRange.end);
+    exportRangeReportPdf(group, remarks);
   }
 });
 
