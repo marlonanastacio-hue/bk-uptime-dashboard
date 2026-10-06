@@ -308,6 +308,114 @@ function remarksInRange(remarks, start, end) {
   return remarks.filter((r) => r.date >= start && r.date <= end);
 }
 
+// ---------------------------------------------------------------------------
+// Manage devices -- backed by a "Devices" sheet tab that holds manual
+// additions and overrides. UniFi APs/switches are discovered automatically
+// by UniFi's API, so for them "remove" means "stop monitoring/counting this
+// one" (Monitored = No) and "restore" flips it back. CCTV/Biometrics can be
+// added, edited (name/IP/type) and removed. ping_devices.py and
+// aggregate_daily.py read the same tab, so a change here affects polling and
+// downtime, not just what's displayed.
+// ---------------------------------------------------------------------------
+function parseDevices(values) {
+  if (!values || values.length < 2) return [];
+  const header = (values[0] || []).map((h) => String(h || ""));
+  const col = (re) => header.findIndex((h) => re.test(h));
+  const idx = { name: col(/name/i), type: col(/type/i), host: col(/host/i), ip: col(/\bip\b/i),
+                mac: col(/mac/i), monitored: col(/monitor/i), source: col(/source/i) };
+  if (idx.name < 0 || idx.type < 0) return [];
+  const get = (row, i) => (i >= 0 && row[i] !== undefined && row[i] !== null ? String(row[i]).trim() : "");
+  const out = [];
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    const name = get(row, idx.name), type = get(row, idx.type);
+    if (!name && !get(row, idx.mac)) continue;
+    out.push({
+      name, type, host: get(row, idx.host), ip: get(row, idx.ip), mac: get(row, idx.mac),
+      monitored: get(row, idx.monitored).toLowerCase() !== "no",
+      source: get(row, idx.source) || "Manual",
+    });
+  }
+  return out;
+}
+
+async function saveDeviceRemote(d) {
+  const url = $("cfg-url").value.trim();
+  const secret = $("cfg-secret").value.trim();
+  await callAppsScript(url, secret, "saveDevice", {
+    name: d.name, type: d.type, host: d.host || "", ip: d.ip || "", mac: d.mac || "",
+    monitored: d.monitored ? "Yes" : "No", source: d.source || "Manual",
+  });
+  const k = deviceKey(d.type, d.name, d.mac);
+  const i = lastDevices.findIndex((x) => deviceKey(x.type, x.name, x.mac) === k);
+  const rec = { name: d.name, type: d.type, host: d.host || "", ip: d.ip || "", mac: d.mac || "",
+                monitored: !!d.monitored, source: d.source || "Manual" };
+  if (i >= 0) lastDevices[i] = rec; else lastDevices.push(rec);
+  lastLiveStatus = parseLiveStatus(lastRawRows, ignoredKeysFrom(lastDevices));
+}
+
+function renderManageDevices() {
+  const live = [];
+  Object.keys((lastLiveStatus && lastLiveStatus.devices) || {}).forEach((t) => {
+    lastLiveStatus.devices[t].forEach((d) => live.push(d));
+  });
+  const liveKeys = new Set(live.map((d) => deviceKey(d.type, d.name, d.mac)));
+  const removed = lastDevices.filter((d) => !d.monitored);
+  const pending = lastDevices.filter((d) => d.monitored && !liveKeys.has(deviceKey(d.type, d.name, d.mac)));
+
+  const btn = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:3px 9px; font-size:11px; cursor:pointer; margin-right:4px;";
+  const attrs = (d) => `data-dev-type="${escapeHtml(d.type)}" data-dev-name="${escapeHtml(d.name)}" data-dev-mac="${escapeHtml(d.mac || "")}" data-dev-ip="${escapeHtml(d.ip || "")}" data-dev-host="${escapeHtml(d.host || "")}"`;
+  const canEdit = (d) => PING_TYPES.has(d.type);
+
+  const liveRows = live.map((d) => `<tr>
+      <td>${escapeHtml(d.name)}</td><td>${escapeHtml(d.type)}</td><td>${escapeHtml(d.ip || "—")}</td>
+      <td style="color:${d.status === "online" ? "var(--sg)" : "var(--red)"};">${escapeHtml(d.status)}</td>
+      <td>${canEdit(d) ? `<button type="button" style="${btn}" data-dev-action="edit" ${attrs(d)}>Edit</button>` : ""}
+          <button type="button" style="${btn}" data-dev-action="remove" ${attrs(d)}>Remove</button></td>
+    </tr>`);
+  const pendingRows = pending.map((d) => `<tr>
+      <td>${escapeHtml(d.name)}</td><td>${escapeHtml(d.type)}</td><td>${escapeHtml(d.ip || "—")}</td>
+      <td style="color:var(--text-mute);">new &middot; waiting for next ping</td>
+      <td>${canEdit(d) ? `<button type="button" style="${btn}" data-dev-action="edit" ${attrs(d)}>Edit</button>` : ""}
+          <button type="button" style="${btn}" data-dev-action="remove" ${attrs(d)}>Remove</button></td>
+    </tr>`);
+  const removedRows = removed.map((d) => `<tr style="opacity:0.7;">
+      <td>${escapeHtml(d.name)}</td><td>${escapeHtml(d.type)}</td><td>${escapeHtml(d.ip || "—")}</td>
+      <td style="color:var(--text-mute);">removed</td>
+      <td><button type="button" style="${btn}" data-dev-action="restore" ${attrs(d)}>Restore</button></td>
+    </tr>`);
+
+  const e = editingDevice;
+  const inputStyle = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:5px 8px; font-size:12px;";
+  const typeOpts = ["CCTV", "Biometrics"].map((t) =>
+    `<option value="${t}" ${e && e.type === t ? "selected" : ""}>${t}</option>`).join("");
+  const form = `<div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-top:12px;">
+      <div><div class="hero-label" style="margin-bottom:4px;">Name</div>
+        <input type="text" id="dev-name" value="${e ? escapeHtml(e.name) : ""}" style="${inputStyle}" /></div>
+      <div><div class="hero-label" style="margin-bottom:4px;">Type</div>
+        <select id="dev-type" style="${inputStyle}">${typeOpts}</select></div>
+      <div><div class="hero-label" style="margin-bottom:4px;">IP address</div>
+        <input type="text" id="dev-ip" value="${e ? escapeHtml(e.ip) : ""}" placeholder="192.168.x.x" style="${inputStyle}" /></div>
+      <button type="button" id="dev-save" style="background:#2563eb; color:white; border:none; border-radius:6px; padding:7px 16px; font-size:13px; cursor:pointer;">${e ? "Save changes" : "Add device"}</button>
+      ${e ? `<button type="button" id="dev-cancel" style="${btn} padding:7px 14px; font-size:13px;">Cancel</button>` : ""}
+    </div>
+    <div id="dev-status" style="margin-top:8px; font-size:12px; color:var(--text-mute);"></div>`;
+
+  const body = manageOpen ? `
+    <div class="section-note">UniFi access points/switches are discovered automatically: <em>Remove</em> stops counting that one (it stays in UniFi). CCTV/Biometrics can also be added and edited. Changes apply to polling and downtime, and take effect on the next 10-minute run.</div>
+    <div style="overflow-x:auto; margin-top:8px;"><table>
+      <thead><tr><th>Name</th><th>Type</th><th>IP</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>${liveRows.concat(pendingRows, removedRows).join("") || `<tr><td colspan="5">No devices yet.</td></tr>`}</tbody>
+    </table></div>
+    ${form}` : "";
+
+  return `<section>
+    <h2>Manage devices
+      <button type="button" id="manage-toggle" style="${btn} margin-left:10px;">${manageOpen ? "Hide" : "Show"}</button>
+    </h2>${body}
+  </section>`;
+}
+
 function renderRemarkForm() {
   const today = new Date().toISOString().slice(0, 10);
   const inputStyle = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:5px 8px; font-size:12px;";
@@ -396,7 +504,22 @@ function parseScoreboard(values) {
 const POLL_TYPES = new Set(["Access Point", "Switch"]);
 const PING_TYPES = new Set(["CCTV", "Biometrics"]);
 
-function parseLiveStatus(values) {
+// Key used to match a device against the Devices-tab overrides: AP/Switch by
+// MAC, CCTV/Biometrics by name (they have no MAC).
+function deviceKey(type, name, mac) {
+  return POLL_TYPES.has(type)
+    ? `mac:${String(mac || "").toLowerCase()}`
+    : `name:${String(name || "").toLowerCase()}`;
+}
+
+// Devices-tab rows with Monitored = No -> set of keys to hide everywhere.
+function ignoredKeysFrom(devices) {
+  const set = new Set();
+  (devices || []).forEach((d) => { if (!d.monitored) set.add(deviceKey(d.type, d.name, d.mac)); });
+  return set;
+}
+
+function parseLiveStatus(values, ignored) {
   if (!values || values.length < 2) return { counts: {}, devices: {}, lastPollTs: null, lastPingTs: null };
   const latestByDevice = new Map();
   let lastPollTs = null; // most recent poll_devices.py (Access Point/Switch) sample
@@ -407,11 +530,12 @@ function parseLiveStatus(values) {
     if (!ts || !type) continue;
     if (POLL_TYPES.has(type) && (!lastPollTs || ts > lastPollTs)) lastPollTs = ts;
     if (PING_TYPES.has(type) && (!lastPingTs || ts > lastPingTs)) lastPingTs = ts;
+    if (ignored && ignored.has(deviceKey(type, name, mac))) continue; // removed via Manage devices
     const key = `${type}::${name}::${mac}`;
     const existing = latestByDevice.get(key);
     if (!existing || ts > existing.ts) {
       latestByDevice.set(key, {
-        ts, type, name: name || "(unnamed)", host: host || "",
+        ts, type, name: name || "(unnamed)", host: host || "", mac: mac || "",
         ip: ip || "", status: String(status || "").toLowerCase(),
       });
     }
@@ -1111,6 +1235,10 @@ function renderSummary(rows) {
 let lastRows = null;        // daily rows from the most recent successful load
 let lastLiveStatus = null;
 let lastRemarks = [];       // manually-typed downtime reasons from the "Remarks" tab
+let lastRawRows = [];       // raw RawStatusLog rows, kept so live status can be recomputed after a device change
+let lastDevices = [];       // rows from the "Devices" tab (manual additions + remove/restore overrides)
+let manageOpen = false;     // Manage devices section expanded?
+let editingDevice = null;   // CCTV/Biometrics device currently being edited in the Manage devices form
 let currentGranularity = "weekly"; // which Report period filter button is active
 let customDateRange = { start: null, end: null }; // Daily filter's calendar range picker
 
@@ -1123,6 +1251,7 @@ function renderApp() {
     renderHero(lastRows, lastLiveStatus, currentGranularity, customDateRange) + // latest day / selected period result / current quarter-week, all in one card
     renderRemarkForm() +
     renderLiveStatus(lastLiveStatus || {}) +
+    renderManageDevices() +
     renderTopology(lastLiveStatus || {}, latestRow) +
     renderSummary(lastRows); // summary always reflects daily data — "latest day" only makes sense at daily grain
 }
@@ -1148,15 +1277,18 @@ async function loadDashboard() {
   filterBar.style.display = "none";
 
   try {
-    const [scoreboardData, rawLogData, remarksData] = await Promise.all([
+    const [scoreboardData, rawLogData, remarksData, devicesData] = await Promise.all([
       callAppsScript(url, secret, "getSheetData", { tab }),
       callAppsScript(url, secret, "getRawLog"),
-      // Remarks tab is optional -- if it doesn't exist yet, don't fail the whole load.
+      // Remarks / Devices tabs are optional -- if they don't exist yet, don't fail the whole load.
       callAppsScript(url, secret, "getSheetData", { tab: "Remarks" }).catch(() => ({ values: [] })),
+      callAppsScript(url, secret, "getSheetData", { tab: "Devices" }).catch(() => ({ values: [] })),
     ]);
 
     lastRows = parseScoreboard(scoreboardData.values || []);
-    lastLiveStatus = parseLiveStatus(rawLogData.rows || []);
+    lastRawRows = rawLogData.rows || [];
+    lastDevices = parseDevices(devicesData.values || []);
+    lastLiveStatus = parseLiveStatus(lastRawRows, ignoredKeysFrom(lastDevices));
     lastRemarks = parseRemarks(remarksData.values || []);
     expandedCategory = null;
     customDateRange = { start: null, end: null };
@@ -1212,6 +1344,67 @@ $("app").addEventListener("click", (e) => {
     const group = aggregateCustomRange(lastRows, customDateRange.start, customDateRange.end);
     const remarks = remarksInRange(lastRemarks, customDateRange.start, customDateRange.end);
     exportRangeReportPdf(group, remarks);
+    return;
+  }
+
+  if (e.target.closest("#manage-toggle")) {
+    manageOpen = !manageOpen;
+    renderApp();
+    return;
+  }
+
+  const devBtn = e.target.closest("[data-dev-action]");
+  if (devBtn) {
+    const d = {
+      type: devBtn.dataset.devType, name: devBtn.dataset.devName, mac: devBtn.dataset.devMac,
+      ip: devBtn.dataset.devIp, host: devBtn.dataset.devHost,
+    };
+    const action = devBtn.dataset.devAction;
+    if (action === "edit") {
+      editingDevice = d;
+      renderApp();
+      return;
+    }
+    const verb = action === "remove" ? "Remove" : "Restore";
+    if (action === "remove" && !confirm(`Remove "${d.name}" from monitoring? It stops counting in live status and downtime (you can restore it later).`)) return;
+    devBtn.disabled = true;
+    const existing = lastDevices.find((x) => deviceKey(x.type, x.name, x.mac) === deviceKey(d.type, d.name, d.mac));
+    saveDeviceRemote({ ...d, monitored: action === "restore", source: existing ? existing.source : "Override" })
+      .then(() => { renderApp(); })
+      .catch((err) => { devBtn.disabled = false; alert(`${verb} failed: ${err.message}`); });
+    return;
+  }
+
+  if (e.target.closest("#dev-cancel")) {
+    editingDevice = null;
+    renderApp();
+    return;
+  }
+
+  const devSave = e.target.closest("#dev-save");
+  if (devSave) {
+    const name = $("dev-name").value.trim();
+    const type = $("dev-type").value;
+    const ip = $("dev-ip").value.trim();
+    const statusEl = $("dev-status");
+    const fail = (msg) => { statusEl.textContent = msg; statusEl.style.color = "var(--red)"; };
+    if (!name || !ip) return fail("Name and IP address are required.");
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return fail("IP address doesn't look valid (e.g. 192.168.0.50).");
+    const orig = editingDevice;
+    const dup = lastDevices.concat(Object.values((lastLiveStatus && lastLiveStatus.devices) || {}).flat())
+      .some((x) => PING_TYPES.has(x.type) && x.monitored !== false && x.name.toLowerCase() === name.toLowerCase()
+        && !(orig && orig.name.toLowerCase() === name.toLowerCase()));
+    if (dup) return fail("A CCTV/Biometrics device with that name already exists.");
+    devSave.disabled = true;
+    statusEl.textContent = "Saving…"; statusEl.style.color = "var(--text-mute)";
+    (async () => {
+      // Renamed: retire the old name so it stops being pinged, then save the new one.
+      if (orig && orig.name.toLowerCase() !== name.toLowerCase()) {
+        await saveDeviceRemote({ ...orig, monitored: false, source: "Override" });
+      }
+      await saveDeviceRemote({ name, type, ip, host: "BK Tower Shadow", mac: "", monitored: true, source: "Manual" });
+    })().then(() => { editingDevice = null; renderApp(); })
+      .catch((err) => { devSave.disabled = false; fail(`Failed: ${err.message}`); });
     return;
   }
 
