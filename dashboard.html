@@ -217,7 +217,8 @@ function findHeaderRow(values) {
                       switches: /switch/i, cctv: /cctv/i, bio: /biometric/i,
                       totalDT: /total.*dt|total.*downtime/i, uptime: /uptime/i,
                       towerDown: /tower.*down/i, towerUp: /tower.*up/i,
-                      marilaoDown: /marilao.*down/i, marilaoUp: /marilao.*up/i };
+                      marilaoDown: /marilao.*down/i, marilaoUp: /marilao.*up/i,
+                      kalayaanDown: /kalayaan.*down/i, kalayaanUp: /kalayaan.*up/i };
   let best = { rowIdx: -1, hits: 0, cols: {} };
   for (let r = 0; r < Math.min(values.length, 30); r++) {
     const cols = {};
@@ -486,6 +487,8 @@ function parseScoreboard(values) {
       towerUpMbps: header.cols.towerUp !== undefined ? parseNumber(row[header.cols.towerUp]) : null,
       marilaoDownMbps: header.cols.marilaoDown !== undefined ? parseNumber(row[header.cols.marilaoDown]) : null,
       marilaoUpMbps: header.cols.marilaoUp !== undefined ? parseNumber(row[header.cols.marilaoUp]) : null,
+      kalayaanDownMbps: header.cols.kalayaanDown !== undefined ? parseNumber(row[header.cols.kalayaanDown]) : null,
+      kalayaanUpMbps: header.cols.kalayaanUp !== undefined ? parseNumber(row[header.cols.kalayaanUp]) : null,
     });
   }
   return rows;
@@ -738,6 +741,7 @@ function siteOf(hostStr) {
   const h = String(hostStr || "").toLowerCase();
   if (h.includes("tower")) return "tower";
   if (h.includes("marilao")) return "marilao";
+  if (h.includes("kalayaan")) return "kalayaan";
   return null;
 }
 
@@ -790,21 +794,26 @@ function renderTopology(liveStatus, latestRow) {
     total: towerAP.total + towerSw.total + towerCCTV.total + towerBio.total,
   };
   const marilaoGW = { online: marilaoAP.online + marilaoSw.online, total: marilaoAP.total + marilaoSw.total };
+  const kalAP = siteNodeStats(devices, "Access Point", "kalayaan");
+  const kalSw = siteNodeStats(devices, "Switch", "kalayaan");
+  const kalGW = { online: kalAP.online + kalSw.online, total: kalAP.total + kalSw.total };
   const neutral = "var(--text-mute)";
   const line = (x1, y1, x2, y2, arrow) =>
     `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--text-mute)" stroke-width="1" ${arrow ? 'marker-end="url(#topo-arrow)"' : ""}/>`;
 
   const pldtSub = fmtSpeedSub(latestRow ? latestRow.towerDownMbps : null, latestRow ? latestRow.towerUpMbps : null);
   const ptntSub = fmtSpeedSub(latestRow ? latestRow.marilaoDownMbps : null, latestRow ? latestRow.marilaoUpMbps : null);
+  const kalSub = fmtSpeedSub(latestRow ? latestRow.kalayaanDownMbps : null, latestRow ? latestRow.kalayaanUpMbps : null);
 
-  const svg = `<svg width="100%" viewBox="0 0 680 470" style="max-width:680px;">
+  const svg = `<svg width="100%" viewBox="0 0 960 470" style="max-width:960px;">
     <defs><marker id="topo-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M2 1L8 5L2 9" fill="none" stroke="var(--text-mute)" stroke-width="1.5"/>
     </marker></defs>
 
-    ${topoNode(230, 20, 220, 56, "unifi.ui.com", "Cloud management, both sites", neutral)}
-    <path d="M230,48 L25,48 L25,222 L115,222" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,3"/>
-    <path d="M450,48 L620,48 L620,222 L610,222" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,3"/>
+    ${topoNode(370, 20, 220, 56, "unifi.ui.com", "Cloud management, all sites", neutral)}
+    <path d="M370,48 L25,48 L25,222 L115,222" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,3"/>
+    <path d="M590,48 L640,48 L640,222 L610,222" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,3"/>
+    <path d="M590,48 L930,48 L930,222 L900,222" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,3"/>
 
     ${topoNode(135, 110, 140, 56, "Converge", pldtSub, neutral)}
     ${line(205, 166, 205, 194, true)}
@@ -827,13 +836,21 @@ function renderTopology(liveStatus, latestRow) {
     ${topoNode(455, 290, 120, 56, "Switches", topoCountLabel(marilaoSw), topoColor(marilaoSw))}
     ${line(515, 346, 515, 386, true)}
     ${topoNode(435, 386, 160, 44, "Access Points", topoCountLabel(marilaoAP), topoColor(marilaoAP))}
+
+    ${topoNode(735, 110, 140, 56, "Converge", kalSub, neutral)}
+    ${line(805, 166, 805, 194, true)}
+    ${topoNode(710, 194, 190, 56, "UDM SE gateway", "Kalayaan", topoColor(kalGW))}
+    ${line(805, 250, 805, 290, true)}
+    ${topoNode(745, 290, 120, 56, "Switches", topoCountLabel(kalSw), topoColor(kalSw))}
+    ${line(805, 346, 805, 386, true)}
+    ${topoNode(725, 386, 160, 44, "Access Points", topoCountLabel(kalAP), topoColor(kalAP))}
   </svg>`;
 
   return `<section>
     <h2>Network topology</h2>
     <div class="section-note">
       Device nodes are live from the same RawStatusLog data as Live status above; gateway color reflects the
-      combined status of everything downstream of it. The Converge/PT&amp;T throughput shown is UniFi's own reported
+      combined status of everything downstream of it. The Converge/PT&amp;T/Kalayaan throughput shown is UniFi's own reported
       business-hours average download/upload (Mbps) for the latest day with data, captured nightly alongside
       Internet downtime &mdash; not an active speed test.
     </div>
@@ -950,11 +967,12 @@ function renderBreakdownTable(label, breakdownRows) {
       <td class="num">${fmtPct(r.uptimePct)}</td>
       <td class="num">${fmtMin(r.totalDT)}</td>
       ${showSpeed ? `<td class="num">${fmtSpeed(r.towerDownMbps, r.towerUpMbps)}</td>
-      <td class="num">${fmtSpeed(r.marilaoDownMbps, r.marilaoUpMbps)}</td>` : ""}
+      <td class="num">${fmtSpeed(r.marilaoDownMbps, r.marilaoUpMbps)}</td>
+      <td class="num">${fmtSpeed(r.kalayaanDownMbps, r.kalayaanUpMbps)}</td>` : ""}
     </tr>`).join("");
   return `<div style="overflow-x:auto; margin-top:8px;"><table>
       <thead><tr><th>${escapeHtml(label)}</th><th>Tier</th><th class="num">Uptime %</th><th class="num">Total DT</th>
-      ${showSpeed ? `<th class="num">Converge Mbps</th><th class="num">PT&amp;T Mbps</th>` : ""}</tr></thead>
+      ${showSpeed ? `<th class="num">Converge Mbps</th><th class="num">PT&amp;T Mbps</th><th class="num">Kalayaan Mbps</th>` : ""}</tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }
@@ -965,9 +983,9 @@ function aggregateCustomRange(rows, start, end) {
   const numericFields = ["internet", "ap", "switches", "cctv", "bio", "totalDT"];
   const sums = { internet: 0, ap: 0, switches: 0, cctv: 0, bio: 0, totalDT: 0 };
   let hasAny = false, uptimeSum = 0, uptimeCount = 0;
-  const speedFields = ["towerDownMbps", "towerUpMbps", "marilaoDownMbps", "marilaoUpMbps"];
-  const speedSums = { towerDownMbps: 0, towerUpMbps: 0, marilaoDownMbps: 0, marilaoUpMbps: 0 };
-  const speedCounts = { towerDownMbps: 0, towerUpMbps: 0, marilaoDownMbps: 0, marilaoUpMbps: 0 };
+  const speedFields = ["towerDownMbps", "towerUpMbps", "marilaoDownMbps", "marilaoUpMbps", "kalayaanDownMbps", "kalayaanUpMbps"];
+  const speedSums = { towerDownMbps: 0, towerUpMbps: 0, marilaoDownMbps: 0, marilaoUpMbps: 0, kalayaanDownMbps: 0, kalayaanUpMbps: 0 };
+  const speedCounts = { towerDownMbps: 0, towerUpMbps: 0, marilaoDownMbps: 0, marilaoUpMbps: 0, kalayaanDownMbps: 0, kalayaanUpMbps: 0 };
   filtered.forEach((r) => {
     numericFields.forEach((f) => { if (r[f] !== null && r[f] !== undefined) { sums[f] += r[f]; hasAny = true; } });
     if (r.uptimePct !== null && r.uptimePct !== undefined) { uptimeSum += r.uptimePct; uptimeCount++; }
@@ -1048,6 +1066,7 @@ function exportRangeReportPdf(group, remarks) {
     `CCTV ${fmtMin(group.cctv)}, Biometrics ${fmtMin(group.bio)}, Total DT ${fmtMin(group.totalDT)}`,
     `Average ISP throughput -- Converge (Tower) ${fmtSpeed(group.towerDownMbps, group.towerUpMbps)} down/up`,
     `PT&T (Marilao) ${fmtSpeed(group.marilaoDownMbps, group.marilaoUpMbps)} down/up`,
+    `Converge (Kalayaan) ${fmtSpeed(group.kalayaanDownMbps, group.kalayaanUpMbps)} down/up`,
   ];
   summaryLines.forEach((line) => { doc.text(line, marginX, y); y += 16; });
   y += 10;
@@ -1061,6 +1080,7 @@ function exportRangeReportPdf(group, remarks) {
     r.date, tierFor(r.uptimePct) ? tierFor(r.uptimePct).name : "—", fmtPct(r.uptimePct),
     fmtMin(r.internet), fmtMin(r.ap), fmtMin(r.switches), fmtMin(r.cctv), fmtMin(r.bio), fmtMin(r.totalDT),
     fmtSpeed(r.towerDownMbps, r.towerUpMbps), fmtSpeed(r.marilaoDownMbps, r.marilaoUpMbps),
+    fmtSpeed(r.kalayaanDownMbps, r.kalayaanUpMbps),
   ]);
 
   doc.autoTable({
@@ -1068,7 +1088,7 @@ function exportRangeReportPdf(group, remarks) {
     margin: { left: marginX, right: marginX },
     styles: { fontSize: 8, cellPadding: 4 },
     headStyles: { fillColor: [37, 99, 235] },
-    head: [["Date", "Tier", "Uptime %", "Internet", "AP", "Switches", "CCTV", "Bio", "Total DT", "Converge Mbps", "PT&T Mbps"]],
+    head: [["Date", "Tier", "Uptime %", "Internet", "AP", "Switches", "CCTV", "Bio", "Total DT", "Converge Mbps", "PT&T Mbps", "Kalayaan Mbps"]],
     body,
   });
 
@@ -1181,7 +1201,9 @@ function renderHero(rows, liveStatus, granularity, customRange) {
         Converge (Tower) ${fmtSpeed(latest.towerDownMbps, latest.towerUpMbps)} down/up
         (avg ${fmtSpeedAvg(latest.towerDownMbps, latest.towerUpMbps)}) &middot;
         PT&amp;T (Marilao) ${fmtSpeed(latest.marilaoDownMbps, latest.marilaoUpMbps)} down/up
-        (avg ${fmtSpeedAvg(latest.marilaoDownMbps, latest.marilaoUpMbps)})
+        (avg ${fmtSpeedAvg(latest.marilaoDownMbps, latest.marilaoUpMbps)}) &middot;
+        Converge (Kalayaan) ${fmtSpeed(latest.kalayaanDownMbps, latest.kalayaanUpMbps)} down/up
+        (avg ${fmtSpeedAvg(latest.kalayaanDownMbps, latest.kalayaanUpMbps)})
       </div>
     </div>` : `<div style="flex:1; min-width:200px;"><div class="msg" style="padding:0; text-align:left;">No daily result available yet.</div></div>`;
 
