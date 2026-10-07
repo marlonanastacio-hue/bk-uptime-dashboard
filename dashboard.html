@@ -417,8 +417,163 @@ function renderManageDevices() {
   </section>`;
 }
 
+// ---------------------------------------------------------------------------
+// Daily check-in -- a log of who reviewed the dashboard each business day.
+// Stored in two sheet tabs: "Checkers" (Name | Active) is the list of people
+// who can check in; "Checkins" (Date | Time | Name | Notes) is the log. Dates
+// use the browser's LOCAL date (not UTC). Business days = Mon-Fri; a past
+// business day with no check-in shows as Missed, today as Pending until
+// someone checks in.
+// ---------------------------------------------------------------------------
+function localDateStr(d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function localTimeStr(d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function parseCheckins(values) {
+  if (!values || values.length < 2) return [];
+  const header = (values[0] || []).map((h) => String(h || ""));
+  const col = (re) => header.findIndex((h) => re.test(h));
+  const idx = { date: col(/date/i), time: col(/time/i), name: col(/name|who/i), notes: col(/note|remark/i) };
+  if (idx.date < 0 || idx.name < 0) return [];
+  const get = (row, i) => (i >= 0 && row[i] !== undefined && row[i] !== null ? String(row[i]).trim() : "");
+  const out = [];
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    const date = get(row, idx.date).slice(0, 10);
+    const name = get(row, idx.name);
+    if (!date || !name) continue;
+    out.push({ date, time: get(row, idx.time), name, notes: get(row, idx.notes) });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+}
+
+function parseCheckers(values) {
+  if (!values || values.length < 2) return [];
+  const header = (values[0] || []).map((h) => String(h || ""));
+  const iName = header.findIndex((h) => /name/i.test(h));
+  const iActive = header.findIndex((h) => /active/i.test(h));
+  if (iName < 0) return [];
+  const out = [];
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    const name = row[iName] !== undefined && row[iName] !== null ? String(row[iName]).trim() : "";
+    if (!name) continue;
+    const active = iActive < 0 ? true : String(row[iActive] === undefined || row[iActive] === null ? "" : row[iActive]).trim().toLowerCase() !== "no";
+    out.push({ name, active });
+  }
+  return out;
+}
+
+// Per-business-day check status for [start, end] (inclusive, YYYY-MM-DD).
+function checkSummary(start, end) {
+  const empty = { rows: [], checked: 0, missed: 0, total: 0 };
+  if (!start || !end) return empty;
+  const today = localDateStr();
+  const rows = [];
+  let checked = 0, missed = 0;
+  const d = new Date(`${start}T00:00:00`);
+  const last = new Date(`${end}T00:00:00`);
+  if (isNaN(d) || isNaN(last)) return empty;
+  for (; d <= last; d.setDate(d.getDate() + 1)) {
+    const dow = d.getDay();
+    if (dow === 0 || dow === 6) continue; // business days only
+    const ds = localDateStr(d);
+    if (ds > today) break; // future days aren't due yet
+    const mine = lastCheckins.filter((c) => c.date === ds);
+    let status;
+    if (mine.length) { status = "Checked"; checked++; }
+    else if (ds < today) { status = "Missed"; missed++; }
+    else status = "Pending";
+    rows.push({
+      date: ds, status,
+      who: mine.map((c) => c.name).filter((v, i, a) => a.indexOf(v) === i).join(", "),
+      time: mine.map((c) => c.time).filter(Boolean).join(", "),
+      notes: mine.map((c) => c.notes).filter(Boolean).join(" | "),
+    });
+  }
+  return { rows, checked, missed, total: checked + missed };
+}
+
+function renderChecksSummaryLine(sum) {
+  if (!sum || !sum.total) return "";
+  const color = sum.missed ? "var(--yellow)" : "var(--sg)";
+  return `<div class="hero-sub" style="margin-top:10px;">Daily checks:
+    <strong style="color:${color};">${sum.checked} of ${sum.total}</strong> business days checked${sum.missed ? ` &middot; ${sum.missed} missed` : ""}</div>`;
+}
+
+function renderChecksTable(sum) {
+  if (!sum || !sum.rows.length) return "";
+  const color = { Checked: "var(--sg)", Missed: "var(--red)", Pending: "var(--text-mute)" };
+  const rows = sum.rows.map((r) => `<tr>
+      <td>${escapeHtml(r.date)}</td>
+      <td style="color:${color[r.status]};">${r.status}</td>
+      <td>${escapeHtml(r.who || "—")}</td>
+      <td class="num">${escapeHtml(r.time || "—")}</td>
+      <td>${escapeHtml(r.notes || "—")}</td>
+    </tr>`).join("");
+  return `<div class="hero-label" style="margin-top:14px;">Daily checks</div>
+    ${renderChecksSummaryLine(sum)}
+    <div style="overflow-x:auto; margin-top:6px;"><table>
+      <thead><tr><th>Date</th><th>Status</th><th>Checked by</th><th class="num">Time</th><th>Notes</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+function renderCheckinSection() {
+  const today = localDateStr();
+  const active = lastCheckers.filter((c) => c.active);
+  const todays = lastCheckins.filter((c) => c.date === today);
+  const inputStyle = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:5px 8px; font-size:12px;";
+  const btn = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:3px 9px; font-size:11px; cursor:pointer; margin-right:4px;";
+
+  const banner = todays.length
+    ? `<span style="color:var(--sg);">Checked today</span> by ${escapeHtml(todays.map((c) => `${c.name}${c.time ? " at " + c.time : ""}`).join(", "))}`
+    : `<span style="color:var(--yellow);">Not checked yet today</span> (${today})`;
+
+  const form = active.length
+    ? `<div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-top:10px;">
+        <div><div class="hero-label" style="margin-bottom:4px;">Who</div>
+          <select id="checkin-name" style="${inputStyle}">${active.map((c) => `<option>${escapeHtml(c.name)}</option>`).join("")}</select></div>
+        <div style="flex:1; min-width:220px;"><div class="hero-label" style="margin-bottom:4px;">Notes (optional)</div>
+          <input type="text" id="checkin-notes" placeholder="e.g. all green, 1 AP offline noted" style="${inputStyle} width:100%;" /></div>
+        <button type="button" id="checkin-submit" style="background:#2563eb; color:white; border:none; border-radius:6px; padding:7px 16px; font-size:13px; cursor:pointer;">Mark as checked today</button>
+      </div>`
+    : `<div class="msg" style="padding:10px 0 0; text-align:left;">Add the people who do the daily check first (Manage people).</div>`;
+
+  const people = checkersOpen ? `
+    <div style="margin-top:12px;">
+      ${lastCheckers.map((c) => `<span style="display:inline-block; margin:0 10px 6px 0; ${c.active ? "" : "opacity:0.55;"}">
+          ${escapeHtml(c.name)}
+          <button type="button" style="${btn} margin-left:6px;" data-checker-action="${c.active ? "deactivate" : "activate"}" data-checker-name="${escapeHtml(c.name)}">${c.active ? "Deactivate" : "Activate"}</button></span>`).join("") || `<span class="hero-sub">No people yet.</span>`}
+      <div style="display:flex; gap:8px; margin-top:6px; flex-wrap:wrap;">
+        <input type="text" id="checker-name" placeholder="Full name" style="${inputStyle}" />
+        <button type="button" id="checker-add" style="background:#2563eb; color:white; border:none; border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer;">Add person</button>
+      </div>
+    </div>` : "";
+
+  const startD = new Date(); startD.setDate(startD.getDate() - 13);   // last 14 calendar days
+  const sum = checkSummary(localDateStr(startD), today);
+
+  return `<section>
+    <h2>Daily check-in
+      <button type="button" id="checkers-toggle" style="${btn} margin-left:10px;">${checkersOpen ? "Hide people" : "Manage people"}</button>
+    </h2>
+    <div class="section-note">Log that someone reviewed the dashboard today. Each business day (Mon&ndash;Fri) should have at least one check-in; missed days show in red here and in the reports.</div>
+    <div style="font-size:13px;">${banner}</div>
+    ${form}
+    <div id="checkin-status" style="margin-top:8px; font-size:12px; color:var(--text-mute);"></div>
+    ${people}
+    ${renderChecksTable(sum)}
+  </section>`;
+}
+
 function renderRemarkForm() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateStr();
   const inputStyle = "background:var(--panel-2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:5px 8px; font-size:12px;";
   return `<section>
     <h2>Log a downtime remark</h2>
@@ -1020,7 +1175,7 @@ function renderDailyRangePanel(rows, customRange) {
       </div>
       ${group
         ? renderPeriodSummaryBlock(`Result: ${group.date}`, hasData ? group : null) + renderBreakdownTable("Date", group.dailyRows) +
-          renderRemarksTable(rangeRemarks) +
+          renderRemarksTable(rangeRemarks) + renderChecksTable(checkSummary(start, end)) +
           `<button type="button" id="export-pdf" ${hasData ? "" : "disabled"} style="margin-top:12px; background:${hasData ? "#2563eb" : "var(--panel-2)"}; color:${hasData ? "white" : "var(--text-mute)"}; border:1px solid ${hasData ? "#2563eb" : "var(--border)"}; border-radius:6px; padding:7px 14px; font-size:13px; cursor:${hasData ? "pointer" : "default"};">Export report (PDF)</button>`
         : `<div class="msg" style="padding:8px 0 0; text-align:left;">Pick a start and end date, then click Show.</div>`}
     </div>`;
@@ -1031,7 +1186,7 @@ function renderDailyRangePanel(rows, customRange) {
 // whatever date range is currently picked in the Daily filter, using jsPDF
 // (loaded from CDN in <head>). Entirely client-side, no server involved.
 // ---------------------------------------------------------------------------
-function exportRangeReportPdf(group, remarks) {
+function exportRangeReportPdf(group, remarks, checks) {
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert("PDF library didn't load (check your internet connection) -- try reloading the page.");
     return;
@@ -1113,6 +1268,31 @@ function exportRangeReportPdf(group, remarks) {
     doc.text("No remarks logged for this range.", marginX, afterTableY + 10);
   }
 
+  // Daily check-in section: every business day in the range, with who checked.
+  let checksY = (doc.lastAutoTable && doc.lastAutoTable.finalY) ? doc.lastAutoTable.finalY + 24 : afterTableY + 40;
+  if (checksY > 740) { doc.addPage(); checksY = 50; }
+  doc.setFontSize(13);
+  doc.setFont(undefined, "bold");
+  doc.text("Daily checks", marginX, checksY);
+  checksY += 8;
+  if (checks && checks.rows.length) {
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+    doc.text(`${checks.checked} of ${checks.total} business days checked` + (checks.missed ? ` (${checks.missed} missed)` : ""), marginX, checksY + 10);
+    doc.autoTable({
+      startY: checksY + 18,
+      margin: { left: marginX, right: marginX },
+      styles: { fontSize: 8, cellPadding: 4 },
+      headStyles: { fillColor: [37, 99, 235] },
+      head: [["Date", "Status", "Checked by", "Time", "Notes"]],
+      body: checks.rows.map((r) => [r.date, r.status, r.who || "—", r.time || "—", r.notes || "—"]),
+    });
+  } else {
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+    doc.text("No business days to check in this range.", marginX, checksY + 12);
+  }
+
   const fileStart = group.date.split(" to ")[0] || "range";
   const fileEnd = group.date.split(" to ")[1] || "";
   doc.save(`BK-Network-Report_${fileStart}_to_${fileEnd}.pdf`);
@@ -1170,11 +1350,13 @@ function renderPeriodResultPanel(rows, granularity, customRange) {
   const title = titles[granularity] + (group ? ` (${group.date})` : "");
   const { start: periodStart, end: periodEnd } = dateRangeOfRows(group && group.dailyRows);
   const periodRemarks = remarksInRange(lastRemarks, periodStart, periodEnd);
+  const periodChecks = checkSummary(periodStart, periodEnd);
   return `
     <div style="flex:1; min-width:260px; border-left:1px solid var(--border); padding-left:24px;">
       ${renderPeriodSummaryBlock(title, group)}
       ${renderBreakdownTable(breakdownLabels[granularity], breakdown)}
       ${renderRemarksTable(periodRemarks)}
+      ${renderChecksSummaryLine(periodChecks)}
     </div>`;
 }
 
@@ -1261,6 +1443,9 @@ let lastRawRows = [];       // raw RawStatusLog rows, kept so live status can be
 let lastDevices = [];       // rows from the "Devices" tab (manual additions + remove/restore overrides)
 let manageOpen = false;     // Manage devices section expanded?
 let editingDevice = null;   // CCTV/Biometrics device currently being edited in the Manage devices form
+let lastCheckins = [];      // daily dashboard check-ins from the "Checkins" tab
+let lastCheckers = [];      // people who can check in, from the "Checkers" tab
+let checkersOpen = false;   // Manage people expanded?
 let currentGranularity = "weekly"; // which Report period filter button is active
 let customDateRange = { start: null, end: null }; // Daily filter's calendar range picker
 
@@ -1271,6 +1456,7 @@ function renderApp() {
   const latestRow = withUptime[withUptime.length - 1] || null;
   app.innerHTML =
     renderHero(lastRows, lastLiveStatus, currentGranularity, customDateRange) + // latest day / selected period result / current quarter-week, all in one card
+    renderCheckinSection() +
     renderRemarkForm() +
     renderLiveStatus(lastLiveStatus || {}) +
     renderManageDevices() +
@@ -1299,12 +1485,14 @@ async function loadDashboard() {
   filterBar.style.display = "none";
 
   try {
-    const [scoreboardData, rawLogData, remarksData, devicesData] = await Promise.all([
+    const [scoreboardData, rawLogData, remarksData, devicesData, checkinsData, checkersData] = await Promise.all([
       callAppsScript(url, secret, "getSheetData", { tab }),
       callAppsScript(url, secret, "getRawLog"),
       // Remarks / Devices tabs are optional -- if they don't exist yet, don't fail the whole load.
       callAppsScript(url, secret, "getSheetData", { tab: "Remarks" }).catch(() => ({ values: [] })),
       callAppsScript(url, secret, "getSheetData", { tab: "Devices" }).catch(() => ({ values: [] })),
+      callAppsScript(url, secret, "getSheetData", { tab: "Checkins" }).catch(() => ({ values: [] })),
+      callAppsScript(url, secret, "getSheetData", { tab: "Checkers" }).catch(() => ({ values: [] })),
     ]);
 
     lastRows = parseScoreboard(scoreboardData.values || []);
@@ -1312,6 +1500,11 @@ async function loadDashboard() {
     lastDevices = parseDevices(devicesData.values || []);
     lastLiveStatus = parseLiveStatus(lastRawRows, ignoredKeysFrom(lastDevices));
     lastRemarks = parseRemarks(remarksData.values || []);
+    lastCheckins = parseCheckins(checkinsData.values || []);
+    lastCheckers = parseCheckers(checkersData.values || []);
+    // Default people (aliases) until the Checkers tab has its own list:
+    // Jeff = Jeffrey Jordan, Pao = Pao Dimayuga, Allen = BK.IT account.
+    if (!lastCheckers.length) lastCheckers = ["Jeff", "Pao", "Allen"].map((name) => ({ name, active: true }));
     expandedCategory = null;
     customDateRange = { start: null, end: null };
 
@@ -1365,7 +1558,7 @@ $("app").addEventListener("click", (e) => {
   if (exportBtn && !exportBtn.disabled && lastRows && customDateRange.start && customDateRange.end) {
     const group = aggregateCustomRange(lastRows, customDateRange.start, customDateRange.end);
     const remarks = remarksInRange(lastRemarks, customDateRange.start, customDateRange.end);
-    exportRangeReportPdf(group, remarks);
+    exportRangeReportPdf(group, remarks, checkSummary(customDateRange.start, customDateRange.end));
     return;
   }
 
@@ -1427,6 +1620,61 @@ $("app").addEventListener("click", (e) => {
       await saveDeviceRemote({ name, type, ip, host: "BK Tower Shadow", mac: "", monitored: true, source: "Manual" });
     })().then(() => { editingDevice = null; renderApp(); })
       .catch((err) => { devSave.disabled = false; fail(`Failed: ${err.message}`); });
+    return;
+  }
+
+  if (e.target.closest("#checkers-toggle")) {
+    checkersOpen = !checkersOpen;
+    renderApp();
+    return;
+  }
+
+  const checkerBtn = e.target.closest("[data-checker-action]");
+  if (checkerBtn) {
+    const name = checkerBtn.dataset.checkerName;
+    const makeActive = checkerBtn.dataset.checkerAction === "activate";
+    checkerBtn.disabled = true;
+    callAppsScript($("cfg-url").value.trim(), $("cfg-secret").value.trim(), "saveChecker", { name, active: makeActive ? "Yes" : "No" })
+      .then(() => {
+        const c = lastCheckers.find((x) => x.name.toLowerCase() === name.toLowerCase());
+        if (c) c.active = makeActive;
+        renderApp();
+      })
+      .catch((err) => { checkerBtn.disabled = false; alert(`Failed: ${err.message}`); });
+    return;
+  }
+
+  if (e.target.closest("#checker-add")) {
+    const input = $("checker-name");
+    const name = input ? input.value.trim() : "";
+    if (!name) return;
+    if (lastCheckers.some((x) => x.name.toLowerCase() === name.toLowerCase())) { alert("That person is already in the list."); return; }
+    callAppsScript($("cfg-url").value.trim(), $("cfg-secret").value.trim(), "saveChecker", { name, active: "Yes" })
+      .then(() => { lastCheckers.push({ name, active: true }); renderApp(); })
+      .catch((err) => alert(`Failed: ${err.message}`));
+    return;
+  }
+
+  const checkinBtn = e.target.closest("#checkin-submit");
+  if (checkinBtn) {
+    const name = $("checkin-name") ? $("checkin-name").value : "";
+    const notes = $("checkin-notes") ? $("checkin-notes").value.trim() : "";
+    const statusEl = $("checkin-status");
+    if (!name) return;
+    const now = new Date();
+    const date = localDateStr(now), time = localTimeStr(now);
+    checkinBtn.disabled = true;
+    if (statusEl) { statusEl.textContent = "Saving…"; statusEl.style.color = "var(--text-mute)"; }
+    callAppsScript($("cfg-url").value.trim(), $("cfg-secret").value.trim(), "appendCheckin", { date, time, name, notes })
+      .then(() => {
+        lastCheckins.push({ date, time, name, notes });
+        lastCheckins.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+        renderApp();
+      })
+      .catch((err) => {
+        checkinBtn.disabled = false;
+        if (statusEl) { statusEl.textContent = `Failed: ${err.message}`; statusEl.style.color = "var(--red)"; }
+      });
     return;
   }
 
