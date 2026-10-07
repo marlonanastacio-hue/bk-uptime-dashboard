@@ -85,6 +85,10 @@
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); margin-top: 10px; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
 
+  .top-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 20px; align-items: start; }
+  .top-grid > div > section { margin-bottom: 14px; }
+  @media (max-width: 1000px) { .top-grid { grid-template-columns: minmax(0, 1fr); } }
+  .filter-bar { flex-wrap: wrap; }
   .filter-bar {
     display: none; gap: 6px; align-items: center; margin-bottom: 20px;
   }
@@ -140,6 +144,9 @@
 
 <div id="error-slot"></div>
 
+<div class="top-grid">
+<div id="top-left"></div>
+<div id="top-right">
 <div class="filter-bar" id="filter-bar">
   <span class="filter-label">Report period:</span>
   <button data-granularity="daily">Daily</button>
@@ -147,7 +154,9 @@
   <button data-granularity="monthly">Monthly</button>
   <button data-granularity="quarterly">Quarterly</button>
   <button data-granularity="yearly">Yearly</button>
-  <button type="button" id="view-report" style="margin-left:auto; background:#2563eb; border-color:#2563eb; color:#fff;">View report &darr;</button>
+</div>
+<div id="top-hero"></div>
+</div>
 </div>
 
 <div id="app"><div class="msg">Enter your Apps Script URL and secret above, then click "Load dashboard".</div></div>
@@ -1510,10 +1519,11 @@ function renderApp() {
   const app = $("app");
   const withUptime = lastRows.filter((r) => r.uptimePct !== null);
   const latestRow = withUptime[withUptime.length - 1] || null;
+  // Top-left: daily check-in. Top-right: report period buttons + latest day
+  // result / date picker / current period (the hero card). Everything else below.
+  $("top-left").innerHTML = renderCheckinSection();
+  $("top-hero").innerHTML = renderHero(lastRows, lastLiveStatus, currentGranularity, customDateRange); // latest day / selected period result / current quarter-week, all in one card
   app.innerHTML =
-    renderCheckinSection() + // daily check-in at the very top
-    `<div id="report-anchor" style="scroll-margin-top:12px;"></div>` +
-    renderHero(lastRows, lastLiveStatus, currentGranularity, customDateRange) + // latest day / selected period result / current quarter-week, all in one card
     renderLiveStatus(lastLiveStatus || {}) +
     renderManageDevices() +
     fold("topology", "Network topology", renderTopology(lastLiveStatus || {}, latestRow)) +
@@ -1539,6 +1549,7 @@ async function loadDashboard() {
   saveConfig({ url, secret, tab });
   statusLine.textContent = "Loading…";
   app.innerHTML = `<div class="msg">Loading…</div>`;
+  $("top-left").innerHTML = ""; $("top-hero").innerHTML = "";
   filterBar.style.display = "none";
 
   try {
@@ -1571,6 +1582,7 @@ async function loadDashboard() {
     statusLine.textContent = `Loaded ${lastRows.length} days · ${new Date().toLocaleTimeString()}`;
   } catch (err) {
     app.innerHTML = "";
+    $("top-left").innerHTML = ""; $("top-hero").innerHTML = "";
     filterBar.style.display = "none";
     errorSlot.innerHTML = `<div class="error-box">${err.message}</div>`;
     statusLine.textContent = "Failed to load";
@@ -1579,26 +1591,19 @@ async function loadDashboard() {
 
 $("cfg-load").addEventListener("click", loadDashboard);
 
-function scrollToReport() {
-  const el = $("report-anchor");
-  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
 $("filter-bar").addEventListener("click", (e) => {
-  if (e.target.closest("#view-report")) { scrollToReport(); return; }
   const btn = e.target.closest("button[data-granularity]");
   if (!btn) return;
   currentGranularity = btn.dataset.granularity;
   $("filter-bar").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
   renderApp();
-  scrollToReport();
 });
 
 // #app itself is never replaced (only its innerHTML), so a listener attached
 // here survives every re-render -- toggles the clicked live-status card's
 // device-detail panel open/closed, and applies the Daily filter's picked
 // calendar range when "Show" is clicked.
-$("app").addEventListener("click", (e) => {
+const onAppClick = (e) => {
   const catBtn = e.target.closest("button[data-toggle-category]");
   if (catBtn) {
     const cat = catBtn.dataset.toggleCategory;
@@ -1786,7 +1791,8 @@ $("app").addEventListener("click", (e) => {
       });
     return;
   }
-});
+};
+["app", "top-left", "top-hero"].forEach((id) => $(id).addEventListener("click", onAppClick));
 
 // auto-load if we already have saved config
 if ($("cfg-url").value && $("cfg-secret").value) {
