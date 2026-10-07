@@ -147,6 +147,7 @@
   <button data-granularity="monthly">Monthly</button>
   <button data-granularity="quarterly">Quarterly</button>
   <button data-granularity="yearly">Yearly</button>
+  <button type="button" id="view-report" style="margin-left:auto; background:#2563eb; border-color:#2563eb; color:#fff;">View report &darr;</button>
 </div>
 
 <div id="app"><div class="msg">Enter your Apps Script URL and secret above, then click "Load dashboard".</div></div>
@@ -1511,6 +1512,7 @@ function renderApp() {
   const latestRow = withUptime[withUptime.length - 1] || null;
   app.innerHTML =
     renderCheckinSection() + // daily check-in at the very top
+    `<div id="report-anchor" style="scroll-margin-top:12px;"></div>` +
     renderHero(lastRows, lastLiveStatus, currentGranularity, customDateRange) + // latest day / selected period result / current quarter-week, all in one card
     renderLiveStatus(lastLiveStatus || {}) +
     renderManageDevices() +
@@ -1577,12 +1579,19 @@ async function loadDashboard() {
 
 $("cfg-load").addEventListener("click", loadDashboard);
 
+function scrollToReport() {
+  const el = $("report-anchor");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 $("filter-bar").addEventListener("click", (e) => {
+  if (e.target.closest("#view-report")) { scrollToReport(); return; }
   const btn = e.target.closest("button[data-granularity]");
   if (!btn) return;
   currentGranularity = btn.dataset.granularity;
   $("filter-bar").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
   renderApp();
+  scrollToReport();
 });
 
 // #app itself is never replaced (only its innerHTML), so a listener attached
