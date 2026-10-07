@@ -482,6 +482,10 @@ const CHECK_ASSIGNMENTS = [
   { area: "CCTV & Biometrics", owner: "Pao" },
 ];
 
+// Daily checking starts on this date. Earlier business days are shown greyed
+// out ("N/A") and are not counted as missed.
+const CHECKS_START = "2026-10-07";
+
 // Per-business-day check status for [start, end] (inclusive, YYYY-MM-DD).
 // A day is Complete when every assigned person checked in, Partial when some
 // did, Missed when nobody did (past days), Pending while today is unfinished.
@@ -501,6 +505,10 @@ function checkSummary(start, end) {
     if (dow === 0 || dow === 6) continue; // business days only
     const ds = localDateStr(d);
     if (ds > today) break; // future days aren't due yet
+    if (ds < CHECKS_START) {
+      rows.push({ date: ds, status: "N/A", areas: CHECK_ASSIGNMENTS.map((a) => ({ area: a.area, owner: a.owner, status: "N/A", time: "" })), notes: "" });
+      continue;
+    }
     const mine = lastCheckins.filter((c) => c.date === ds);
     const areas = CHECK_ASSIGNMENTS.map((a) => {
       const hit = mine.filter((c) => c.name.toLowerCase() === a.owner.toLowerCase());
@@ -538,10 +546,10 @@ function renderChecksSummaryLine(sum) {
 
 function renderChecksTable(sum) {
   if (!sum || !sum.rows.length) return "";
-  const color = { Checked: "var(--sg)", Complete: "var(--sg)", Missed: "var(--red)", Partial: "var(--yellow)", Pending: "var(--text-mute)" };
+  const color = { Checked: "var(--sg)", Complete: "var(--sg)", Missed: "var(--red)", Partial: "var(--yellow)", Pending: "var(--text-mute)", "N/A": "var(--text-mute)" };
   const cell = (a) => `<td style="color:${color[a.status]};">${a.status === "Checked" ? "Checked" + (a.time ? " " + escapeHtml(a.time) : "") : a.status}</td>`;
   const heads = CHECK_ASSIGNMENTS.map((a) => `<th>${escapeHtml(a.area)} (${escapeHtml(a.owner)})</th>`).join("");
-  const rows = sum.rows.map((r) => `<tr>
+  const rows = sum.rows.map((r) => `<tr${r.status === "N/A" ? ' style="opacity:0.4;"' : ""}>
       <td>${escapeHtml(r.date)}</td>
       <td style="color:${color[r.status]};">${r.status}</td>
       ${r.areas.map(cell).join("")}
