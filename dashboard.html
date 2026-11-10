@@ -235,6 +235,14 @@
   .topo-tip li.down .tip-dot { background: #f87171; }
   .topo-tip li.down .tip-status, .topo-tip li.down .tip-name { color: #fecaca; font-weight: 600; }
   .topo-tip .tip-empty { color: #a7cdb4; padding: 4px 0 6px; }
+
+  .topo-isp-v { font-size: 13px; font-weight: 800; fill: #bef264; }
+  .topo-isp-v.up { fill: #86efac; }
+  .topo-tip .tip-isp { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 6px 8px 8px 0; }
+  .topo-tip .tip-isp div { background: rgba(255,255,255,0.06); border-radius: 8px; padding: 6px 8px; }
+  .topo-tip .tip-isp span { display: block; font-size: 10.5px; color: #a7cdb4; }
+  .topo-tip .tip-isp strong { font-size: 20px; font-weight: 800; color: #fff; }
+  .topo-tip .tip-isp em { font-style: normal; font-size: 10.5px; color: #bef264; margin-left: 4px; }
   .topo-flow { animation: topoFlow 1.2s linear infinite; opacity: 0.75; }
   @keyframes topoFlow { to { stroke-dashoffset: -44; } }
   .topo-pulse { transform-box: fill-box; transform-origin: center; animation: topoPulse 1.8s ease-out infinite; }
@@ -1202,22 +1210,31 @@ function renderTopology(liveStatus, latestRow) {
   T.gw = sum(T.ap, T.sw, T.cctv, T.bio); M.gw = sum(M.ap, M.sw); K.gw = sum(K.ap, K.sw);
 
   const speed = (d, u) => fmtSpeedSub(latestRow ? latestRow[d] : null, latestRow ? latestRow[u] : null);
+  // Latest day that has UniFi's business-hours average traffic for this ISP.
+  const traffic = (d, u) => {
+    const rows = (typeof lastRows !== "undefined" && lastRows) || [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      if (r[d] !== null && r[d] !== undefined && r[u] !== null && r[u] !== undefined) return { down: r[d], up: r[u], date: r.date };
+    }
+    return null;
+  };
 
   // Graph nodes: kind "isp" | "cloud" have no device count; everything else
   // shows a ring filled to its online %.
   const N = {
     cloud:  { x: 560, y: 62,  r: 26, label: "unifi.ui.com", kind: "cloud" },
-    tIsp:   { x: 150, y: 150, r: 26, label: "Converge", sub: speed("towerDownMbps", "towerUpMbps"), kind: "isp" },
+    tIsp:   { x: 150, y: 150, r: 30, label: "Converge", site: "Tower Shadow", traffic: traffic("towerDownMbps", "towerUpMbps"), kind: "isp" },
     tGw:    { x: 250, y: 250, r: 34, label: "UDM SE · Tower", stats: T.gw },
     tSw:    { x: 190, y: 352, r: 30, label: "Switches", stats: T.sw },
     tAp:    { x: 80,  y: 450, r: 30, label: "APs", stats: T.ap },
     tCctv:  { x: 215, y: 470, r: 30, label: "CCTV", stats: T.cctv },
     tBio:   { x: 350, y: 440, r: 30, label: "Biometrics", stats: T.bio },
-    mIsp:   { x: 560, y: 170, r: 26, label: "PT&T", sub: speed("marilaoDownMbps", "marilaoUpMbps"), kind: "isp" },
+    mIsp:   { x: 560, y: 166, r: 30, label: "PT&T", site: "Marilao Warehouse", traffic: traffic("marilaoDownMbps", "marilaoUpMbps"), kind: "isp" },
     mGw:    { x: 560, y: 278, r: 34, label: "UDM SE · Marilao", stats: M.gw },
     mSw:    { x: 500, y: 382, r: 30, label: "Switches", stats: M.sw },
     mAp:    { x: 625, y: 455, r: 30, label: "Access Points", stats: M.ap },
-    kIsp:   { x: 960, y: 150, r: 26, label: "Converge", sub: speed("kalayaanDownMbps", "kalayaanUpMbps"), kind: "isp" },
+    kIsp:   { x: 960, y: 150, r: 30, label: "Converge", site: "Kalayaan", traffic: traffic("kalayaanDownMbps", "kalayaanUpMbps"), kind: "isp" },
     kGw:    { x: 870, y: 250, r: 34, label: "UDM SE · Kalayaan", stats: K.gw },
     kSw:    { x: 930, y: 352, r: 30, label: "Switches", stats: K.sw },
     kAp:    { x: 840, y: 450, r: 30, label: "Access Points", stats: K.ap },
@@ -1271,7 +1288,10 @@ function renderTopology(liveStatus, latestRow) {
     kGw: listFor(ALL, "kalayaan"), kSw: listFor(["Switch"], "kalayaan"), kAp: listFor(["Access Point"], "kalayaan"),
   };
   topoNodeInfo = {};
-  Object.entries(N).forEach(([key, n]) => { if (n.stats) topoNodeInfo[key] = { label: n.label, stats: n.stats, devices: lists[key] || [] }; });
+  Object.entries(N).forEach(([key, n]) => {
+    if (n.stats) topoNodeInfo[key] = { label: n.label, stats: n.stats, devices: lists[key] || [] };
+    if (n.kind === "isp") topoNodeInfo[key] = { label: `${n.label} · ${n.site}`, isp: n.traffic || {} };
+  });
 
   const nodes = Object.entries(N).map(([key, n]) => {
     const h = health(n);
@@ -1286,6 +1306,20 @@ function renderTopology(liveStatus, latestRow) {
       const body = `<circle cx="${n.x}" cy="${n.y}" r="${n.r}" fill="#0d3a22" stroke="${col}" stroke-width="2" stroke-opacity="0.7"/>
         <text x="${n.x}" y="${n.y}" text-anchor="middle" dominant-baseline="central" style="font-size:20px; fill:${col};">${icon}</text>
         ${pill}${sub}`;
+      if (n.kind === "isp") {
+        const t = n.traffic;
+        const inner = t
+          ? `<text x="${n.x}" y="${n.y - 8}" text-anchor="middle" dominant-baseline="central" class="topo-isp-v">↓${Math.round(t.down)}</text>
+             <text x="${n.x}" y="${n.y + 9}" text-anchor="middle" dominant-baseline="central" class="topo-isp-v up">↑${Math.round(t.up)}</text>`
+          : `<text x="${n.x}" y="${n.y}" text-anchor="middle" dominant-baseline="central" style="font-size:20px; fill:${col};">⇅</text>`;
+        const subTxt = t ? `Mbps avg traffic` : "no traffic data yet";
+        return `<g class="topo-node" data-topo-node="${key}" tabindex="0">
+          <circle cx="${n.x}" cy="${n.y}" r="${n.r + 6}" fill="transparent"/>
+          <circle cx="${n.x}" cy="${n.y}" r="${n.r}" fill="#0d3a22" stroke="${col}" stroke-width="2" stroke-opacity="0.8"/>
+          <circle cx="${n.x}" cy="${n.y}" r="${n.r - 5}" fill="none" stroke="${col}" stroke-opacity="0.25" stroke-width="1" stroke-dasharray="2 4"/>
+          ${inner}${pill}
+          <text x="${n.x}" y="${n.y + n.r + 40}" text-anchor="middle" class="topo-sub">${subTxt}</text></g>`;
+      }
       if (n.kind === "cloud") {
         // Opens UniFi Site Manager in a new tab; lifts and glows on hover.
         return `<a href="https://unifi.ui.com" target="_blank" rel="noopener" class="topo-cloud-link" aria-label="Open unifi.ui.com in a new tab">
@@ -2108,6 +2142,16 @@ const onAppClick = (e) => {
 let topoNodeInfo = {};
 let topoTipTimer = null;
 function topoTipHtml(info) {
+  if (info.isp) {
+    const t = info.isp;
+    if (t.down === undefined) return `<div class="tip-head"><strong>${escapeHtml(info.label)}</strong></div><div class="tip-empty">No traffic data captured yet.</div>`;
+    return `<div class="tip-head"><strong>${escapeHtml(info.label)}</strong><span>${escapeHtml(t.date || "")}</span></div>
+      <div class="tip-isp">
+        <div><span>Download</span><strong>${t.down}</strong><em>Mbps</em></div>
+        <div><span>Upload</span><strong>${t.up}</strong><em>Mbps</em></div>
+      </div>
+      <div class="tip-empty">UniFi's average traffic during business hours that day &mdash; how busy the line was, not a speed test.</div>`;
+  }
   const { online, total } = info.stats;
   const rows = info.devices.map((d) => `<li class="${d.status === "online" ? "" : "down"}">
       <span class="tip-dot"></span><span class="tip-name">${escapeHtml(d.name)}</span>
