@@ -197,7 +197,7 @@
   /* Topology: a dark forest-green control-room panel */
   .topo-panel { display: grid; grid-template-columns: minmax(0, 1fr) 270px; border-radius: 14px; overflow: hidden;
     background: radial-gradient(1200px 500px at 30% 0%, #145a33 0%, #0b3a21 45%, #072816 100%); color: #e6f4ea; }
-  .topo-graph { padding: 10px 6px 8px; min-width: 0; }
+  .topo-graph { padding: 10px 6px 8px; min-width: 0; position: relative; }
   .topo-graph svg { display: block; }
   .topo-label { font-size: 11.5px; font-weight: 600; fill: #d9f2e1; }
   .topo-sub { font-size: 10.5px; fill: #a3e635; }
@@ -213,6 +213,28 @@
   .topo-cloud-link:hover .topo-cloud-glow, .topo-cloud-link:focus-visible .topo-cloud-glow { fill-opacity: 0.18; }
   .topo-cloud-link:hover .topo-cloud-hint, .topo-cloud-link:focus-visible .topo-cloud-hint { opacity: 1; }
   @keyframes cloudBob { 0%, 100% { transform: translateY(-6px) scale(1.12); } 50% { transform: translateY(-10px) scale(1.12); } }
+
+  .topo-graph { position: relative; }
+  .topo-node { cursor: pointer; outline: none; }
+  .topo-node:hover .topo-pct, .topo-node:focus-visible .topo-pct { fill: #d9f99d; }
+  .topo-tip {
+    position: absolute; z-index: 5; width: 270px; max-height: 300px; display: flex; flex-direction: column;
+    background: rgba(255,255,255,0.10); -webkit-backdrop-filter: blur(10px) saturate(140%); backdrop-filter: blur(10px) saturate(140%);
+    border: 1px solid rgba(217,249,157,0.30); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.30);
+    color: #f0fdf4; font-size: 12px; padding: 10px 4px 6px 12px;
+  }
+  .topo-tip[hidden] { display: none; }
+  .topo-tip .tip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 0 8px 7px 0; border-bottom: 1px solid rgba(217,249,157,0.20); margin-bottom: 4px; }
+  .topo-tip .tip-head span { color: #bef264; font-size: 11px; font-weight: 600; }
+  .topo-tip ul { list-style: none; margin: 0; padding: 0 8px 0 0; overflow-y: auto; }
+  .topo-tip li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 3px 0; }
+  .topo-tip .tip-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; }
+  .topo-tip .tip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topo-tip .tip-meta { color: #a7cdb4; font-size: 10.5px; font-family: ui-monospace, Consolas, monospace; }
+  .topo-tip .tip-status { font-size: 10.5px; color: #86efac; }
+  .topo-tip li.down .tip-dot { background: #f87171; }
+  .topo-tip li.down .tip-status, .topo-tip li.down .tip-name { color: #fecaca; font-weight: 600; }
+  .topo-tip .tip-empty { color: #a7cdb4; padding: 4px 0 6px; }
   .topo-flow { animation: topoFlow 1.2s linear infinite; opacity: 0.75; }
   @keyframes topoFlow { to { stroke-dashoffset: -44; } }
   .topo-pulse { transform-box: fill-box; transform-origin: center; animation: topoPulse 1.8s ease-out infinite; }
@@ -1099,14 +1121,22 @@ function renderLiveStatus(liveStatus) {
     </div>`;
   }
 
-  return `<section class="featured">
-    <h2>Live status <span class="live-pill"><span class="live-dot"></span>LIVE</span></h2>
+  return `<div class="grid">${cards.join("")}</div>${detailPanel}`;
+}
+
+// Live status tiles + topology map in one highlighted card.
+function renderLiveNetwork(liveStatus, latestRow) {
+  return `<section class="featured topo-section">
+    <h2>Live network <span class="live-pill"><span class="live-dot"></span>LIVE</span></h2>
     <div class="section-note">
-      Real device status pulled directly from your UDM SE, refreshed every ~10 minutes. This is separate
-      from the downtime numbers in the reports below, which are only calculated once a night for the
-      previous day, and only count outages during business hours (Mon&ndash;Fri, 8:00 AM&ndash;5:30 PM).
+      Real device status from your UniFi consoles and the BK Tower ping job, refreshed every ~10 minutes. Click a tile for its
+      device list, or point at a ring in the map to see the devices behind it. This is separate from the downtime numbers in the
+      reports below, which are calculated nightly and only count business hours (Mon&ndash;Fri, 8:00 AM&ndash;5:30 PM).
     </div>
-    <div class="grid">${cards.join("")}</div>${detailPanel}
+    ${renderLiveStatus(liveStatus)}
+    <div style="margin-top:18px;">${renderTopology(liveStatus, latestRow)}</div>
+    <div class="section-note" style="margin:12px 0 0;">Gateway rings combine everything behind them. ISP throughput is UniFi's reported
+      business-hours average (Mbps) for the latest day &mdash; not a speed test.</div>
   </section>`;
 }
 
@@ -1230,7 +1260,21 @@ function renderTopology(liveStatus, latestRow) {
       ${packets}`;
   }).join("");
 
-  const nodes = Object.values(N).map((n) => {
+  // Devices behind each ring, for the hover list (offline first).
+  const listFor = (cats, site) => cats.flatMap((cat) => (devices[cat] || [])
+    .filter((d) => siteOf(d.host) === site).map((d) => ({ name: d.name, ip: d.ip, status: d.status, cat })))
+    .sort((a, b) => (a.status === "online") - (b.status === "online") || String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
+  const ALL = ["Access Point", "Switch", "CCTV", "Biometrics"];
+  const lists = {
+    tGw: listFor(ALL, "tower"), tSw: listFor(["Switch"], "tower"), tAp: listFor(["Access Point"], "tower"),
+    tCctv: listFor(["CCTV"], "tower"), tBio: listFor(["Biometrics"], "tower"),
+    mGw: listFor(ALL, "marilao"), mSw: listFor(["Switch"], "marilao"), mAp: listFor(["Access Point"], "marilao"),
+    kGw: listFor(ALL, "kalayaan"), kSw: listFor(["Switch"], "kalayaan"), kAp: listFor(["Access Point"], "kalayaan"),
+  };
+  topoNodeInfo = {};
+  Object.entries(N).forEach(([key, n]) => { if (n.stats) topoNodeInfo[key] = { label: n.label, stats: n.stats, devices: lists[key] || [] }; });
+
+  const nodes = Object.entries(N).map(([key, n]) => {
     const h = health(n);
     const col = COL[h];
     const label = escapeHtml(n.label);
@@ -1263,7 +1307,8 @@ function renderTopology(liveStatus, latestRow) {
          <circle class="topo-pulse" cx="${n.x}" cy="${n.y}" r="${n.r + 4}" fill="none" stroke="${col}" stroke-width="2"/>`
       : "";
     const center = total ? `${Math.round(pct)}%` : "—";
-    return `<g><title>${label}: ${total ? `${online}/${total} online` : "no data yet"}</title>
+    return `<g class="topo-node" data-topo-node="${key}" tabindex="0">
+      <circle cx="${n.x}" cy="${n.y}" r="${n.r + 6}" fill="transparent"/>
       ${halo}
       <circle cx="${n.x}" cy="${n.y}" r="${n.r}" fill="#0d3a22"/>
       <circle cx="${n.x}" cy="${n.y}" r="${n.r - 4}" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="5"/>
@@ -1322,10 +1367,8 @@ function renderTopology(liveStatus, latestRow) {
     <div class="topo-side-foot">${linkCount} links · rings show % of devices online</div>
   </aside>`;
 
-  return `<section class="featured topo-section">
-    <h2>Network topology <span class="live-pill"><span class="live-dot"></span>LIVE</span></h2>
-    <div class="topo-panel">
-      <div class="topo-graph">${svg}
+  return `<div class="topo-panel">
+      <div class="topo-graph">${svg}<div class="topo-tip" id="topo-tip" hidden></div>
         <div class="topo-legend">
           <span><i style="background:${COL.ok}"></i>All online</span>
           <span><i style="background:${COL.warn}"></i>Some down</span>
@@ -1335,10 +1378,7 @@ function renderTopology(liveStatus, latestRow) {
         </div>
       </div>
       ${side}
-    </div>
-    <div class="section-note" style="margin:12px 0 0;">Same live RawStatusLog data as Live status. Gateway rings combine everything behind them.
-      ISP throughput is UniFi's reported business-hours average (Mbps) for the latest day &mdash; not a speed test.</div>
-  </section>`;
+    </div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1792,7 +1832,7 @@ function renderApp() {
   const latestRow = withUptime[withUptime.length - 1] || null;
   // Top-left: daily check-in. Top-right: report period buttons + latest day
   // result / date picker / current period (the hero card). Everything else below.
-  $("highlight").innerHTML = renderLiveStatus(lastLiveStatus || {}) + renderTopology(lastLiveStatus || {}, latestRow);
+  $("highlight").innerHTML = renderLiveNetwork(lastLiveStatus || {}, latestRow);
   $("top-left").innerHTML = renderCheckinSection();
   $("top-hero").innerHTML = renderHero(lastRows, lastLiveStatus, currentGranularity, customDateRange); // latest day / selected period result / current quarter-week, all in one card
   app.innerHTML =
@@ -2065,6 +2105,51 @@ const onAppClick = (e) => {
     return;
   }
 };
+// Hovering a topology ring shows the devices behind it in a see-through box.
+let topoNodeInfo = {};
+let topoTipTimer = null;
+function topoTipHtml(info) {
+  const { online, total } = info.stats;
+  const rows = info.devices.map((d) => `<li class="${d.status === "online" ? "" : "down"}">
+      <span class="tip-dot"></span><span class="tip-name">${escapeHtml(d.name)}</span>
+      <span class="tip-meta">${escapeHtml(d.ip || d.cat)}</span>
+      <span class="tip-status">${escapeHtml(d.status)}</span></li>`).join("");
+  return `<div class="tip-head"><strong>${escapeHtml(info.label)}</strong><span>${total ? `${online}/${total} online` : "no data yet"}</span></div>
+    ${total ? `<ul>${rows}</ul>` : `<div class="tip-empty">No devices logged for this group yet.</div>`}`;
+}
+function showTopoTip(nodeEl) {
+  const tip = $("topo-tip");
+  const info = tip && topoNodeInfo[nodeEl.dataset.topoNode];
+  if (!info) return;
+  clearTimeout(topoTipTimer);
+  tip.innerHTML = topoTipHtml(info);
+  tip.hidden = false;
+  const graph = tip.parentElement.getBoundingClientRect();
+  const r = nodeEl.getBoundingClientRect();
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let left = r.right - graph.left + 10;
+  if (left + w > graph.width - 6) left = r.left - graph.left - w - 10;   // flip to the left side
+  let top = r.top - graph.top + r.height / 2 - h / 2;
+  top = Math.max(6, Math.min(top, graph.height - h - 6));
+  tip.style.left = `${Math.max(6, left)}px`;
+  tip.style.top = `${top}px`;
+}
+function hideTopoTip(delay = 120) {
+  clearTimeout(topoTipTimer);
+  topoTipTimer = setTimeout(() => { const tip = $("topo-tip"); if (tip) tip.hidden = true; }, delay);
+}
+const highlightEl = $("highlight");
+highlightEl.addEventListener("mouseover", (e) => {
+  const node = e.target.closest("[data-topo-node]");
+  if (node) return showTopoTip(node);
+  if (e.target.closest("#topo-tip")) clearTimeout(topoTipTimer);
+});
+highlightEl.addEventListener("mouseout", (e) => {
+  if (e.target.closest("[data-topo-node]") || e.target.closest("#topo-tip")) hideTopoTip();
+});
+highlightEl.addEventListener("focusin", (e) => { const node = e.target.closest("[data-topo-node]"); if (node) showTopoTip(node); });
+highlightEl.addEventListener("focusout", (e) => { if (e.target.closest("[data-topo-node]")) hideTopoTip(0); });
+
 ["app", "highlight", "top-left", "top-hero"].forEach((id) => $(id).addEventListener("click", onAppClick));
 
 // auto-load if we already have saved config
