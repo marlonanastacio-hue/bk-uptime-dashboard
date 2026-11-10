@@ -573,6 +573,44 @@ function renderChecksTable(sum) {
     </table></div>`;
 }
 
+// Monthly daily-checking rate per person: this month so far + last month.
+// Today only counts once that person has checked in, so an unfinished day
+// never drags the rate down.
+function pctColor(p) {
+  if (p >= 90) return "var(--sg)";
+  if (p >= 75) return "var(--yellow)";
+  return "var(--red)";
+}
+
+function renderMonthlyCheckRates() {
+  const now = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const monthStr = (d) => `${d.getFullYear()}-${p(d.getMonth() + 1)}`;
+  const thisStart = `${monthStr(now)}-01`;
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+  const months = [
+    { label: now.toLocaleString("en-US", { month: "long", year: "numeric" }) + " (so far)", sum: checkSummary(thisStart, localDateStr(now)) },
+    { label: prev.toLocaleString("en-US", { month: "long", year: "numeric" }), sum: checkSummary(localDateStr(prev), localDateStr(prevEnd)) },
+  ];
+  const cell = (o) => {
+    if (!o || !o.total) return `<td style="color:var(--text-mute);">—</td>`;
+    const pct = (o.done / o.total) * 100;
+    return `<td><strong style="color:${pctColor(pct)}; font-size:15px;">${pct.toFixed(0)}%</strong>
+      <span style="color:var(--text-mute); font-size:11px;"> ${o.done}/${o.total} days</span></td>`;
+  };
+  const rows = CHECK_ASSIGNMENTS.map((a) => `<tr>
+      <td><strong>${escapeHtml(a.owner)}</strong> <span style="color:var(--text-mute); font-size:11px;">${escapeHtml(a.area)}</span></td>
+      ${months.map((m) => cell(m.sum.byOwner[a.owner])).join("")}
+    </tr>`).join("");
+  return `<div class="hero-label" style="margin-top:14px;">Daily checking rate per month</div>
+    <div style="overflow-x:auto; margin-top:6px;"><table>
+      <thead><tr><th>Person</th>${months.map((m) => `<th>${escapeHtml(m.label)}</th>`).join("")}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div style="font-size:11px; color:var(--text-mute); margin-top:4px;">Business days checked &divide; business days due. Green 90%+, yellow 75&ndash;89%, red below 75%.</div>`;
+}
+
 function renderCheckinSection() {
   const today = localDateStr();
   const active = lastCheckers.filter((c) => c.active);
@@ -619,6 +657,7 @@ function renderCheckinSection() {
     ${form}
     <div id="checkin-status" style="margin-top:8px; font-size:12px; color:var(--text-mute);"></div>
     ${people}
+    ${renderMonthlyCheckRates()}
     ${renderChecksTable(sum)}
   </section>`;
 }
