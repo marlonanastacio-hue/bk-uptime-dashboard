@@ -1129,12 +1129,11 @@ function renderLiveNetwork(liveStatus, latestRow) {
   return `<section class="featured topo-section">
     <h2>Live network <span class="live-pill"><span class="live-dot"></span>LIVE</span></h2>
     <div class="section-note">
-      Real device status from your UniFi consoles and the BK Tower ping job, refreshed every ~10 minutes. Click a tile for its
-      device list, or point at a ring in the map to see the devices behind it. This is separate from the downtime numbers in the
+      Real device status from your UniFi consoles and the BK Tower ping job, refreshed every ~10 minutes. Point at a ring
+      in the map to see the devices behind it. This is separate from the downtime numbers in the
       reports below, which are calculated nightly and only count business hours (Mon&ndash;Fri, 8:00 AM&ndash;5:30 PM).
     </div>
-    ${renderLiveStatus(liveStatus)}
-    <div style="margin-top:18px;">${renderTopology(liveStatus, latestRow)}</div>
+    ${renderTopology(liveStatus, latestRow)}
     <div class="section-note" style="margin:12px 0 0;">Gateway rings combine everything behind them. ISP throughput is UniFi's reported
       business-hours average (Mbps) for the latest day &mdash; not a speed test.</div>
   </section>`;
